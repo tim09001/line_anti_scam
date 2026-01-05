@@ -1,3 +1,4 @@
 pyrogram>=2.0.0
 babel>=2.9.0
 pytz>=2021.3
+uvloop>=0.18.0
