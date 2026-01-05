@@ -30,7 +30,7 @@ API_HASH = 'b5e24c6a48beb5ee0273055c25ee1d22'
 
 NUM_WORKERS = 16
 
-app = Client("line_anti_scam", bot_token='8187221182:AAHa-XCt5lcnSu2TMcLQNVk05nX2Ny8Td9k', api_id=API_ID, api_hash=API_HASH, workers=NUM_WORKERS)
+app = Client("line_anti_scam", bot_token='8577200923:AAEbAk2s4NR5SGVuY58hJ1RUQU8N_L4NO04', api_id=API_ID, api_hash=API_HASH, workers=NUM_WORKERS)
 
 
 image_scam = r'https://ibb.co/fYgNLDyd'
