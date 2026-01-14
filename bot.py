@@ -503,15 +503,16 @@ async def check(app: Client, message: Message, user_id):
         if not user:
             insert_user_into_db(user_id)
             user = get_user_from_db(user_id)
+        
+        if user:
+            user_id_db, search, leaks = user
+        else:
+            search = 0
+            leaks = 0
+            
     except Exception as e:
         logging.error(f"Ошибка работы с БД для пользователя {user_id}: {e}")
         return None, None
-
-    if user:
-        user_id_db, search, leaks = user
-    else:
-        search = 0
-        leaks = 0
 
     admin_data, user_data, garant_data, trusted_data, scammer_data = get_user_data(user_id)
 
@@ -782,7 +783,7 @@ async def mute_handler(app: Client, message: Message):
         chat_id = message.chat.id
         
         if message.chat.type not in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP, enums.ChatType.CHANNEL]:
-            await message.reply('⚠️ Эта команда работает только в группах и чатах')
+            await message.reply('⚠️ Эта команда работает только в группых и чатах')
             return
         
         status = check_status(user_id)
@@ -1141,6 +1142,10 @@ async def check_user(app: Client, message: Message):
             task = asyncio.create_task(update_message_with_dots())
 
             photo, text = await check(app, message, user_id_to_check)
+            
+            # Увеличиваем счетчик проверок только один раз
+            cursor.execute('UPDATE users SET search = search + 1 WHERE id = ?', (user_id_to_check,))
+            connection.commit()
 
             if photo and text:
                 try:
@@ -1289,12 +1294,38 @@ async def scamm(app: Client, message: Message):
         if check_status(user) in [1, 2, 3, 4, 5]:
             args = message.text.split()
             if len(args) < 4:
-                await message.reply("⚠️ Недостаточно аргументов. Используйте: /scam <id> <пруфы> <причина>")
+                await message.reply("⚠️ Недостаточно аргументов. Используйте: /scam <id/юзернейм> <ссылка на пруфы> <причина>")
                 return
 
             id = args[1]
-            link = args[2].replace("https://t.me/LineReports/", "")
+            link = args[2]
+            
+            # Берем все оставшиеся слова как причину
             prufy = ' '.join(args[3:])
+
+            # Проверяем, является ли ссылка корректной
+            if not link.startswith(('https://', 'http://', 't.me/')):
+                await message.reply('⚠️ Некорректная ссылка на пруфы. Укажите полную ссылку')
+                return
+
+            # Если ссылка в формате t.me/LineReports/номер, преобразуем в полную ссылку
+            if link.startswith('t.me/'):
+                link = 'https://' + link
+
+            # Извлекаем ID сообщения из ссылки для сохранения в базе
+            message_id = None
+            if 'LineReports/' in link:
+                try:
+                    message_id = link.split('/')[-1]
+                    if not message_id.isdigit():
+                        await message.reply('⚠️ В ссылке не найден ID сообщения')
+                        return
+                except:
+                    await message.reply('⚠️ Ошибка в обработке ссылки')
+                    return
+            else:
+                # Если это не ссылка на LineReports, сохраняем как есть
+                message_id = link
 
             if not id.isdigit():
                 try:
@@ -1304,10 +1335,37 @@ async def scamm(app: Client, message: Message):
                     await message.reply('⚠️ Ошибка в получении айди юзера')
                     return
 
+            # Создаем короткие callback_data с хешированием для избежания ошибки
+            import hashlib
+            import json
+            
+            # Создаем уникальный идентификатор для callback
+            callback_data_scam = hashlib.md5(f"scam_{user}_{id}_2".encode()).hexdigest()[:32]
+            callback_data_possible = hashlib.md5(f"scam_{user}_{id}_1".encode()).hexdigest()[:32]
+            
+            # Сохраняем данные во временное хранилище
+            callback_storage[callback_data_scam] = {
+                "type": "scam",
+                "user_id": user,
+                "scammer_id": id,
+                "prufy": prufy,
+                "message_id": message_id,
+                "status": "2"
+            }
+            
+            callback_storage[callback_data_possible] = {
+                "type": "scam",
+                "user_id": user,
+                "scammer_id": id,
+                "prufy": prufy,
+                "message_id": message_id,
+                "status": "1"
+            }
+
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton(text="❌ Скаммер!", callback_data=f"scam:{user}:{id}:{prufy}:{link}:2"),
-                    InlineKeyboardButton(text="⚠️ Возможно скаммер!", callback_data=f"scam:{user}:{id}:{prufy}:{link}:1")
+                    InlineKeyboardButton(text="❌ Скаммер!", callback_data=callback_data_scam),
+                    InlineKeyboardButton(text="⚠️ Возможно скаммер!", callback_data=callback_data_possible)
                 ]
             ])
             await message.reply('🔻 Выберите статус скаммера.', reply_markup=buttons)
@@ -1315,7 +1373,11 @@ async def scamm(app: Client, message: Message):
             await message.reply('🚫 Нет прав.')
     except Exception as e:
         logging.error(f"Ошибка в scamm: {e}")
+        await message.reply(f'⚠️ Ошибка: {str(e)}')
 
+
+# Глобальное хранилище для callback данных
+callback_storage = {}
 
 @app.on_message(filters.text)
 async def handle_all_messages(app: Client, message: Message):
@@ -1331,8 +1393,14 @@ async def handle_all_messages(app: Client, message: Message):
 
         if message.text == 'Мой профиль 🆔':
             id = message.from_user.id
+            
             photo, text = await check(app, message, id)
             msg = await message.reply('🔎 Проверяется в базе данных...')
+            
+            # Увеличиваем счетчик проверок только один раз
+            cursor.execute('UPDATE users SET search = search + 1 WHERE id = ?', (id,))
+            connection.commit()
+            
             if photo and text:
                 try:
                     await message.reply_photo(
@@ -1481,14 +1549,22 @@ async def callback_handler(app: Client, callback_query: CallbackQuery):
                 except Exception as e:
                     logging.error(f"Ошибка обработки check: {e}")
 
-        elif data.startswith('scam'):
-            data_parts = data.split(':')
-            if len(data_parts) >= 6:
-                user_id = data_parts[1]
-                scammer_id = data_parts[2]
-                prufy = data_parts[3]
-                link = f'https://t.me/LineReports/{data_parts[4]}'
-                status = data_parts[5]
+        elif data in callback_storage:
+            # Обработка callback из хранилища
+            callback_data = callback_storage[data]
+            
+            if callback_data["type"] == "scam":
+                user_id = callback_data["user_id"]
+                scammer_id = callback_data["scammer_id"]
+                prufy = callback_data["prufy"]
+                message_id = callback_data["message_id"]
+                status = callback_data["status"]
+                
+                # Формируем ссылку на основе переданного message_id
+                if message_id.startswith(('http://', 'https://')):
+                    link = message_id
+                else:
+                    link = f'https://t.me/LineReports/{message_id}'
 
                 if check_status(user_id) in [1, 2, 3, 4, 5]:
                     if check_status(user_id) in [2, 3, 4, 5]:
@@ -1507,12 +1583,30 @@ async def callback_handler(app: Client, callback_query: CallbackQuery):
                                 return
                             kurator_id = kurator_check[0]
 
+                            # Создаем callback для принятия/отклонения заявки
+                            accept_callback = hashlib.md5(f"accept_{user_id}_{scammer_id}_{status}".encode()).hexdigest()[:32]
+                            decline_callback = hashlib.md5(f"decline_{user_id}_{scammer_id}".encode()).hexdigest()[:32]
+                            
+                            callback_storage[accept_callback] = {
+                                "type": "accept",
+                                "curator_id": user_id,
+                                "scammer_id": scammer_id,
+                                "prufy": prufy,
+                                "message_id": message_id,
+                                "status": status
+                            }
+                            
+                            callback_storage[decline_callback] = {
+                                "type": "decline",
+                                "curator_id": user_id,
+                                "scammer_id": scammer_id,
+                                "message_id": message_id
+                            }
+
                             buttons = InlineKeyboardMarkup([
                                 [
-                                    InlineKeyboardButton(text="✅ Принять",
-                                                         callback_data=f"accept:{callback_query.from_user.id}:{scammer_id}:{prufy}:{data_parts[4]}:{status}"),
-                                    InlineKeyboardButton(text="❌ Отклонить",
-                                                         callback_data=f"decline:{callback_query.from_user.id}:{scammer_id}:{data_parts[4]}")
+                                    InlineKeyboardButton(text="✅ Принять", callback_data=accept_callback),
+                                    InlineKeyboardButton(text="❌ Отклонить", callback_data=decline_callback)
                                 ]
                             ])
 
@@ -1526,51 +1620,64 @@ async def callback_handler(app: Client, callback_query: CallbackQuery):
                             await callback_query.edit_message_text('❗ Произошла ошибка при получении куратора.')
                 else:
                     await callback_query.answer('❌ У вас нет прав для выполнения этого действия.', show_alert=True)
+                
+                # Удаляем использованный callback из хранилища
+                if data in callback_storage:
+                    del callback_storage[data]
 
-        elif data.startswith('accept'):
-            data_parts = data.split(':')
-            if len(data_parts) >= 5:
-                curator_id = data_parts[1]
-                scammer_id = data_parts[2]
-                prufy = data_parts[3]
-                application_link = f'https://t.me/{callback_query.message.chat.id}/{callback_query.message.id}'
-                status = data_parts[4]
+        elif "accept" in data or "decline" in data:
+            # Это старый формат, оставляем для обратной совместимости
+            if data.startswith('accept:'):
+                data_parts = data.split(':')
+                if len(data_parts) >= 6:
+                    curator_id = data_parts[1]
+                    scammer_id = data_parts[2]
+                    prufy = data_parts[3]
+                    message_id = data_parts[4]
+                    status = data_parts[5]
+                    application_link = f'https://t.me/{callback_query.message.chat.id}/{callback_query.message.id}'
+                    
+                    # Формируем ссылку на основе переданного message_id
+                    if message_id.startswith(('http://', 'https://')):
+                        link = message_id
+                    else:
+                        link = f'https://t.me/LineReports/{message_id}'
 
-                cursor.execute('SELECT kurator FROM admins WHERE id = ?', (curator_id,))
-                kurator_check = cursor.fetchone()
-                if kurator_check is None:
-                    await callback_query.answer('🚫 Вы не являетесь куратором стажера.', show_alert=True)
-                    return
+                    cursor.execute('SELECT kurator FROM admins WHERE id = ?', (curator_id,))
+                    kurator_check = cursor.fetchone()
+                    if kurator_check is None:
+                        await callback_query.answer('🚫 Вы не являетесь куратором стажера.', show_alert=True)
+                        return
 
-                try:
-                    scam(scammer_id, status, prufy, application_link)
+                    try:
+                        scam(scammer_id, status, prufy, link)
+                        await app.send_message(curator_id,
+                                               f'✅ Ваша заявка принята куратором. Ссылка на заявку: {application_link}')
+                        await app.send_message(callback_query.from_user.id,
+                                               f'✅ Ваша заявка принята куратором. Ссылка на заявку: {application_link}')
+                        await callback_query.edit_message_text('✅ Заявка принята куратором.')
+                    except Exception as e:
+                        logging.error(f"Error while accepting the scam request: {e}")
+                        await callback_query.edit_message_text('❗ Произошла ошибка при принятии заявки.')
+
+            elif data.startswith('decline:'):
+                data_parts = data.split(':')
+                if len(data_parts) >= 4:
+                    curator_id = data_parts[1]
+                    scammer_id = data_parts[2]
+                    application_link = f'https://t.me/{callback_query.message.chat.id}/{callback_query.message.id}'
+
+                    cursor.execute('SELECT kurator FROM admins WHERE id = ?', (curator_id,))
+                    kurator_check = cursor.fetchone()
+                    if kurator_check is None:
+                        await callback_query.answer('🚫 Вы не являетесь куратором стажера.', show_alert=True)
+                        return
+
+                    await callback_query.edit_message_text('❌ Заявка отклонена куратором.')
                     await app.send_message(curator_id,
-                                           f'✅ Ваша заявка принята куратором. Ссылка на заявку: {application_link}')
+                                           f'❌ Заявка от пользователя {callback_query.from_user.id} была отклонена. Ссылка на заявку: {application_link}')
                     await app.send_message(callback_query.from_user.id,
-                                           f'✅ Ваша заявка принята куратором. Ссылка на заявку: {application_link}')
-                    await callback_query.edit_message_text('✅ Заявка принята куратором.')
-                except Exception as e:
-                    logging.error(f"Error while accepting the scam request: {e}")
-                    await callback_query.edit_message_text('❗ Произошла ошибка при принятии заявки.')
-
-        elif data.startswith('decline'):
-            data_parts = data.split(':')
-            if len(data_parts) >= 4:
-                curator_id = data_parts[1]
-                scammer_id = data_parts[2]
-                application_link = f'https://t.me/{callback_query.message.chat.id}/{callback_query.message.id}'
-
-                cursor.execute('SELECT kurator FROM admins WHERE id = ?', (curator_id,))
-                kurator_check = cursor.fetchone()
-                if kurator_check is None:
-                    await callback_query.answer('🚫 Вы не являетесь куратором стажера.', show_alert=True)
-                    return
-
-                await callback_query.edit_message_text('❌ Заявка отклонена куратором.')
-                await app.send_message(curator_id,
-                                       f'❌ Заявка от пользователя {callback_query.from_user.id} была отклонена. Ссылка на заявку: {application_link}')
-                await app.send_message(callback_query.from_user.id,
-                                       f'❌ Ваша заявка была отклонена куратором. Ссылка на заявку: {application_link}')
+                                           f'❌ Ваша заявка была отклонена куратором. Ссылка на заявку: {application_link}')
     except Exception as e:
         logging.error(f"Ошибка в callback_handler: {e}")
 
