@@ -23,7 +23,7 @@ from pyrogram.errors import ChatAdminRequired, UserAdminInvalid
 OWNER_ID = [6257985367, 7724765203]
 API_ID = 28760873
 API_HASH = 'b5e24c6a48beb5ee0273055c25ee1d22'
-BOT_TOKEN = '8577200923:AAEBYX9341D1ssgRhtjqxzYYfKKTl5uhyMs'
+BOT_TOKEN = '8577200923:AAHLYtksJkBt4WzX_b35YxzIw1edeD5iEHw'
 NUM_WORKERS = 16
 
 # Создаем клиент сразу
