@@ -26,15 +26,6 @@ API_HASH = 'b5e24c6a48beb5ee0273055c25ee1d22'
 BOT_TOKEN = '8577200923:AAHLYtksJkBt4WzX_b35YxzIw1edeD5iEHw'
 NUM_WORKERS = 16
 
-# Создаем клиент сразу
-app = Client(
-    "line_anti_scam",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workers=NUM_WORKERS
-)
-
 # Изображения (оригинальные ссылки)
 IMAGES = {
     'scam': 'https://ibb.co/fYgNLDyd',
@@ -698,589 +689,6 @@ def command_filter(commands):
     
     return SimpleFilter(commands)
 
-# ========== КОМАНДА CHECK (РАБОТАЕТ В ЧАТАХ И ЛС, ВКЛЮЧАЯ БЕЗ ПРЕФИКСА) ==========
-@app.on_message(command_filter(['check', 'чек', 'проверить']))
-async def check_user_command(app: Client, message: Message):
-    """Проверка пользователя - работает в чатах и ЛС, включая без префикса"""
-    try:
-        user_id = message.from_user.id
-        
-        # Проверка лимитов
-        status = check_status(user_id)
-        if status is None or status < 1:
-            MAX_REQUESTS = 10
-            TIME_LIMIT = 30 * 60
-            REQUEST_INTERVAL = 10
-            
-            current_time = time.time()
-            if user_id not in user_requests:
-                user_requests[user_id] = []
-            
-            user_requests[user_id] = [t for t in user_requests[user_id] if current_time - t < TIME_LIMIT]
-            
-            if len(user_requests[user_id]) >= MAX_REQUESTS:
-                await message.reply('⚠️ Вы превысили лимит запросов. Пожалуйста, подождите 30 минут.')
-                return
-            
-            if user_requests[user_id] and (current_time - user_requests[user_id][-1] < REQUEST_INTERVAL):
-                await message.reply('⚠️ Пожалуйста, подождите 10 секунд перед следующим запросом.')
-                return
-            
-            user_requests[user_id].append(current_time)
-        
-        # Определяем ID для проверки
-        user_id_to_check = None
-        
-        if message.reply_to_message:
-            user_id_to_check = message.reply_to_message.from_user.id
-        else:
-            text = message.text or ""
-            
-            # Определяем, какая команда использована
-            command_used = None
-            for cmd in ['check', 'чек', 'проверить']:
-                if text.lower().startswith(cmd.lower()):
-                    command_used = cmd
-                    break
-            
-            # Проверяем, является ли это командой без префикса
-            is_prefixless = False
-            if command_used:
-                # Если текст начинается с команды и нет префикса перед ней
-                if not any(text.startswith(prefix + command_used) for prefix in ['/', '!', '.', '-']):
-                    is_prefixless = True
-            
-            if is_prefixless:
-                # Команда без префикса
-                if text.lower().strip() == command_used.lower():
-                    # Просто "чек" без аргументов - проверяем себя
-                    user_id_to_check = message.from_user.id
-                else:
-                    # "чек ми" или "чек аргумент"
-                    args = text[len(command_used):].strip()
-                    if args:
-                        first_arg = args.split()[0].strip()
-                        if first_arg.lower() in ['ми', 'меня', 'me', 'myself']:
-                            user_id_to_check = message.from_user.id
-                        elif first_arg.isdigit():
-                            user_id_to_check = int(first_arg)
-                        elif first_arg.startswith('@'):
-                            try:
-                                user_obj = await app.get_users(first_arg)
-                                user_id_to_check = user_obj.id
-                            except:
-                                await message.reply('⚠️ Пользователь не найден.')
-                                return
-                        else:
-                            # Если аргумент не распознан, проверяем себя
-                            user_id_to_check = message.from_user.id
-                    else:
-                        user_id_to_check = message.from_user.id
-            else:
-                # Команда с префиксом
-                for prefix in ['/', '!', '.', '-']:
-                    for cmd in ['check', 'чек', 'проверить']:
-                        if text.startswith(f"{prefix}{cmd}"):
-                            text = text[len(f"{prefix}{cmd}"):].strip()
-                            break
-                
-                # Удаляем упоминание бота если есть
-                if f"@{app.me.username}" in text:
-                    text = text.replace(f"@{app.me.username}", "").strip()
-                
-                if text:
-                    arg = text.split()[0].strip() if text else ""
-                    if arg.lower() in ['ми', 'меня', 'me']:
-                        user_id_to_check = message.from_user.id
-                    elif arg.isdigit():
-                        user_id_to_check = int(arg)
-                    elif arg.startswith('@'):
-                        try:
-                            user_obj = await app.get_users(arg)
-                            user_id_to_check = user_obj.id
-                        except:
-                            await message.reply('⚠️ Пользователь не найден.')
-                            return
-                    else:
-                        # Если аргумент не распознан, проверяем себя
-                        user_id_to_check = message.from_user.id
-                else:
-                    user_id_to_check = message.from_user.id
-        
-        if not user_id_to_check:
-            await message.reply('⚠️ Не указан пользователь для проверки')
-            return
-        
-        msg = await message.reply('🔎 Проверяется в базе данных...')
-        photo, text_result = await check_user_func(app, message, user_id_to_check)
-        
-        if not text_result:
-            await msg.edit_text('❌ Не удалось получить информацию о пользователе')
-            return
-        
-        try:
-            user = await app.get_users(user_id_to_check)
-            profile_link = f'https://t.me/{user.username}' if user.username else f'tg://user?id={user_id_to_check}'
-        except:
-            profile_link = f'tg://user?id={user_id_to_check}'
-        
-        admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(user_id_to_check)
-        
-        buttons = []
-        buttons.append([InlineKeyboardButton("👥 Профиль", url=profile_link)])
-        
-        # В чатах показываем меньше кнопок
-        if message.chat.type == enums.ChatType.PRIVATE:
-            if user_id_to_check == message.from_user.id:
-                buttons.append([InlineKeyboardButton("🌍 Изменить страну", callback_data="change_country")])
-            
-            if scammer_data and user_id_to_check == message.from_user.id:
-                buttons.append([InlineKeyboardButton("📝 Подать апелляцию", 
-                                                   callback_data=f"appeal_{user_id_to_check}")])
-        
-        keyboard = InlineKeyboardMarkup(buttons) if buttons else None
-        
-        try:
-            if photo:
-                await message.reply_photo(
-                    photo=photo,
-                    caption=text_result,
-                    reply_markup=keyboard
-                )
-            else:
-                await message.reply(
-                    text_result,
-                    reply_markup=keyboard
-                )
-        except Exception as e:
-            logger.error(f"Ошибка отправки результата: {e}")
-            await message.reply(text_result, reply_markup=keyboard)
-        
-        await msg.delete()
-        
-    except Exception as e:
-        logger.error(f"Ошибка в check_user_command: {e}")
-        await message.reply(f'❌ Ошибка при проверке: {str(e)}')
-
-# ========== КОМАНДА START ==========
-@app.on_message(command_filter(['start']))
-async def start_command(app: Client, message: Message):
-    """Команда старта"""
-    try:
-        keyboard = ReplyKeyboardMarkup(
-            [
-                ["Мой профиль 🆔", "Слить скаммера 😡", "Частые вопросы ❓"],
-                ["Гаранты 🔥", "Волонтёры 🌴", "Статистика 📊"]
-            ],
-            resize_keyboard=True
-        )
-        await message.reply('🔎 Приветствую в скам базе Line Anti Scam. Выбери что ты хочешь сделать:', reply_markup=keyboard)
-        
-        user_id = message.from_user.id
-        cursor.execute("INSERT OR IGNORE INTO users(id) VALUES (?)", (user_id,))
-        cursor.execute("INSERT OR IGNORE INTO user_countries(user_id, country) VALUES (?, ?)", (user_id, 'Не указана'))
-        connection.commit()
-        
-    except Exception as e:
-        logger.error(f"Ошибка в start_command: {e}")
-
-# ========== КОМАНДА SCAM (РАБОТАЕТ В ЧАТАХ И ЛС) ==========
-@app.on_message(command_filter(['scam', 'скам']))
-async def scam_command(app: Client, message: Message):
-    """Команда добавления скаммера - работает в чатах и ЛС"""
-    try:
-        user_id = message.from_user.id
-        status = check_status(user_id)
-        
-        if not status or status not in (2, 3, 4, 5):
-            await message.reply('⚠️ У вас нет прав для использования этой команды')
-            return
-        
-        # Определяем пользователя для добавления
-        target_user_id = None
-        target_user_name = "Неизвестный"
-        proof_link = ""
-        reason = ""
-        
-        # Проверяем, используется ли команда с ответом на сообщение
-        if message.reply_to_message:
-            # Работаем в чате с ответом на сообщение
-            target_user_id = message.reply_to_message.from_user.id
-            try:
-                target_user = await app.get_users(target_user_id)
-                target_user_name = target_user.first_name or f"ID: {target_user_id}"
-            except:
-                target_user_name = f"ID: {target_user_id}"
-            
-            text = message.text or ""
-            # Удаляем префикс команды
-            for prefix in ['/', '!', '.', '-']:
-                if text.startswith(f"{prefix}scam"):
-                    text = text[len(f"{prefix}scam"):].strip()
-                    break
-                elif text.startswith(f"{prefix}скам"):
-                    text = text[len(f"{prefix}скам"):].strip()
-                    break
-            
-            if text:
-                # Парсим аргументы: ссылка причина
-                args = text.split()
-                if len(args) >= 2:
-                    proof_link = args[0].strip()
-                    reason = ' '.join(args[1:]).strip()
-                elif len(args) == 1:
-                    proof_link = args[0].strip()
-                    reason = "Не указана"
-                else:
-                    # Если аргументов нет, запрашиваем их
-                    await message.reply('⚠️ Укажите ссылку на пруфы и причину через пробел\nПример: /scam https://example.com "Мошенничество"')
-                    return
-            else:
-                await message.reply('⚠️ Укажите ссылку на пруфы и причину через пробел\nПример: /scam https://example.com "Мошенничество"')
-                return
-        else:
-            # Работаем в ЛС или команда с аргументами
-            text = message.text or ""
-            # Удаляем префикс команды
-            for prefix in ['/', '!', '.', '-']:
-                if text.startswith(f"{prefix}scam"):
-                    text = text[len(f"{prefix}scam"):].strip()
-                    break
-                elif text.startswith(f"{prefix}скам"):
-                    text = text[len(f"{prefix}скам"):].strip()
-                    break
-            
-            if not text:
-                await message.reply('⚠️ Используйте: /scam ID/@username ссылка_на_пруфы причина\n\nПримеры:\n/scam 123456789 https://t.me/c/123/456 "Обман при продаже"\n/scam @username https://ibb.co/example "Мошенничество"')
-                return
-            
-            # Парсим аргументы
-            args = text.split()
-            if len(args) < 3:
-                await message.reply('⚠️ Недостаточно аргументов. Формат: /scam ID/@username ссылка_на_пруфы причина\n\nПричина должна быть в кавычках если содержит пробелы.')
-                return
-            
-            target_input = args[0].strip()
-            proof_link = args[1].strip()
-            reason = ' '.join(args[2:]).strip()
-            
-            # Определяем ID пользователя
-            if target_input.isdigit():
-                target_user_id = int(target_input)
-            elif target_input.startswith('@'):
-                try:
-                    user_obj = await app.get_users(target_input)
-                    target_user_id = user_obj.id
-                except:
-                    await message.reply('⚠️ Пользователь не найден')
-                    return
-            elif 't.me/' in target_input:
-                username = target_input.split('t.me/')[-1].split('/')[-1].split('?')[0]
-                try:
-                    user_obj = await app.get_users(f"@{username}")
-                    target_user_id = user_obj.id
-                except:
-                    await message.reply('⚠️ Пользователь не найден')
-                    return
-            else:
-                await message.reply('⚠️ Неверный формат. Используйте ID, @username или ссылку')
-                return
-            
-            try:
-                target_user = await app.get_users(target_user_id)
-                target_user_name = target_user.first_name or f"ID: {target_user_id}"
-            except:
-                target_user_name = f"ID: {target_user_id}"
-        
-        if not target_user_id:
-            await message.reply('⚠️ Не удалось определить ID пользователя')
-            return
-        
-        # Проверяем, не пытаемся ли добавить администратора
-        target_status = check_status(target_user_id)
-        if target_status and target_status >= 2:
-            await message.reply('⚠️ Нельзя добавить администраторов базы в скам')
-            return
-        
-        # Убираем кавычки если есть
-        if reason.startswith('"') and reason.endswith('"'):
-            reason = reason[1:-1]
-        elif reason.startswith("'") and reason.endswith("'"):
-            reason = reason[1:-1]
-        
-        # Проверяем, что ссылка не пустая (принимаем ЛЮБУЮ ссылку)
-        if not proof_link:
-            proof_link = "#"
-        
-        # Создаем клавиатуру для выбора типа скама
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("⚠️ Возможно скаммер", callback_data=f"scam_type_1_{target_user_id}"),
-                InlineKeyboardButton("❗ СКАМ", callback_data=f"scam_type_2_{target_user_id}")
-            ]
-        ])
-        
-        # Сохраняем данные для callback
-        user_appeals[user_id] = {
-            'action': 'scam',
-            'target_id': target_user_id,
-            'proof': proof_link,
-            'reason': reason
-        }
-        
-        await message.reply(
-            f'🎯 <b>Подтвердите добавление скаммера:</b>\n\n'
-            f'👤 <b>Пользователь:</b> {target_user_name}\n'
-            f'🆔 <b>ID:</b> <code>{target_user_id}</code>\n'
-            f'📝 <b>Причина:</b> {reason}\n'
-            f'🔗 <b>Пруфы:</b> {proof_link}\n\n'
-            f'<b>Выберите тип скама:</b>\n'
-            f'<b>⚠️ Возможно скаммер</b> - 75% шанс скама\n'
-            f'<b>❗ СКАМ</b> - 100% шанс скама',
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка в scam_command: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
-# ========== КОМАНДА NOSCAM (УДАЛИТЬ ИЗ БАЗЫ СКАММЕРОВ) ==========
-@app.on_message(command_filter(['noscam', 'unscam', 'унскам', 'удалитьскам']))
-async def noscam_command(app: Client, message: Message):
-    """Команда удаления пользователя из базы скаммеров"""
-    try:
-        user_id = message.from_user.id
-        status = check_status(user_id)
-        
-        # Только админы могут удалять из базы
-        if not status or status not in (2, 3, 4, 5):
-            await message.reply('⚠️ У вас нет прав для использования этой команды')
-            return
-        
-        # Определяем пользователя для удаления
-        target_user_id = None
-        target_user_name = "Неизвестный"
-        
-        # Проверяем, используется ли команда с ответом на сообщение
-        if message.reply_to_message:
-            # Работаем в чате с ответом на сообщение
-            target_user_id = message.reply_to_message.from_user.id
-            try:
-                target_user = await app.get_users(target_user_id)
-                target_user_name = target_user.first_name or f"ID: {target_user_id}"
-            except:
-                target_user_name = f"ID: {target_user_id}"
-        else:
-            # Работаем в ЛС или команда с аргументами
-            text = message.text or ""
-            # Удаляем префикс команды
-            for prefix in ['/', '!', '.', '-']:
-                if text.startswith(f"{prefix}noscam"):
-                    text = text[len(f"{prefix}noscam"):].strip()
-                    break
-                elif text.startswith(f"{prefix}unscam"):
-                    text = text[len(f"{prefix}unscam"):].strip()
-                    break
-                elif text.startswith(f"{prefix}унскам"):
-                    text = text[len(f"{prefix}унскам"):].strip()
-                    break
-                elif text.startswith(f"{prefix}удалитьскам"):
-                    text = text[len(f"{prefix}удалитьскам"):].strip()
-                    break
-            
-            if not text:
-                await message.reply('⚠️ Используйте: /noscam ID/@username\n\nПримеры:\n/noscam 123456789\n/noscam @username')
-                return
-            
-            # Определяем ID пользователя
-            target_input = text.split()[0].strip()
-            
-            if target_input.isdigit():
-                target_user_id = int(target_input)
-            elif target_input.startswith('@'):
-                try:
-                    user_obj = await app.get_users(target_input)
-                    target_user_id = user_obj.id
-                except:
-                    await message.reply('⚠️ Пользователь не найден')
-                    return
-            elif 't.me/' in target_input:
-                username = target_input.split('t.me/')[-1].split('/')[-1].split('?')[0]
-                try:
-                    user_obj = await app.get_users(f"@{username}")
-                    target_user_id = user_obj.id
-                except:
-                    await message.reply('⚠️ Пользователь не найден')
-                    return
-            else:
-                await message.reply('⚠️ Неверный формат. Используйте ID, @username или ссылку')
-                return
-            
-            try:
-                target_user = await app.get_users(target_user_id)
-                target_user_name = target_user.first_name or f"ID: {target_user_id}"
-            except:
-                target_user_name = f"ID: {target_user_id}"
-        
-        if not target_user_id:
-            await message.reply('⚠️ Не удалось определить ID пользователя')
-            return
-        
-        # Проверяем, есть ли пользователь в базе скаммеров
-        cursor.execute('SELECT * FROM scammers WHERE id = ?', (target_user_id,))
-        scammer_data = cursor.fetchone()
-        
-        if not scammer_data:
-            await message.reply(f'⚠️ Пользователь {target_user_name} не найден в базе скаммеров')
-            return
-        
-        # Удаляем пользователя из базы скаммеров
-        if delete_from_scammers(target_user_id):
-            await message.reply(
-                f'✅ <b>Пользователь удален из базы скаммеров!</b>\n\n'
-                f'👤 <b>Пользователь:</b> {target_user_name}\n'
-                f'🆔 <b>ID:</b> <code>{target_user_id}</code>\n'
-                f'👮 <b>Администратор:</b> {message.from_user.mention}\n'
-                f'📅 <b>Дата удаления:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}'
-            )
-        else:
-            await message.reply('❌ Ошибка при удалении пользователя из базы')
-        
-    except Exception as e:
-        logger.error(f"Ошибка в noscam_command: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
-# ========== КОМАНДА MUTE (РАБОТАЕТ В ЧАТАХ) ==========
-@app.on_message(command_filter(['mute', 'мут']))
-async def mute_command(app: Client, message: Message):
-    """Команда мута"""
-    try:
-        if message.chat.type not in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            await message.reply('⚠️ Эта команда работает только в группах')
-            return
-        
-        user_id = message.from_user.id
-        status = check_status(user_id)
-        
-        if not status or status not in (2, 3, 4, 5):
-            await message.reply('⚠️ Нет прав')
-            return
-
-        if message.reply_to_message:
-            target_user = message.reply_to_message.from_user
-            user_id_target = target_user.id
-            
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("5 мин", callback_data=f"mute_5_{user_id_target}"),
-                    InlineKeyboardButton("15 мин", callback_data=f"mute_15_{user_id_target}"),
-                    InlineKeyboardButton("30 мин", callback_data=f"mute_30_{user_id_target}")
-                ],
-                [
-                    InlineKeyboardButton("1 час", callback_data=f"mute_60_{user_id_target}"),
-                    InlineKeyboardButton("3 часа", callback_data=f"mute_180_{user_id_target}"),
-                    InlineKeyboardButton("12 часов", callback_data=f"mute_720_{user_id_target}")
-                ],
-                [
-                    InlineKeyboardButton("1 день", callback_data=f"mute_1440_{user_id_target}"),
-                    InlineKeyboardButton("3 дня", callback_data=f"mute_4320_{user_id_target}"),
-                    InlineKeyboardButton("7 дней", callback_data=f"mute_10080_{user_id_target}")
-                ],
-                [
-                    InlineKeyboardButton("Навсегда", callback_data=f"mute_permanent_{user_id_target}")
-                ]
-            ])
-            
-            await message.reply(
-                f'⏰ Выберите время мута для пользователя {target_user.first_name}:',
-                reply_markup=keyboard
-            )
-        else:
-            await message.reply('⚠️ Ответьте на сообщение пользователя, которого хотите замутить')
-            
-    except Exception as e:
-        logger.error(f"Ошибка в mute_command: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
-# ========== КОМАНДА СПАСИБО ==========
-@app.on_message(command_filter(['спасибо', 'thanks', '+спасибо']))
-async def thanks_command(app: Client, message: Message):
-    """Команда спасибо"""
-    try:
-        if message.reply_to_message:
-            target_user = message.reply_to_message.from_user
-            target_id = target_user.id
-            
-            increment_leaked_count(target_id)
-            
-            cursor.execute("SELECT leaked FROM users WHERE id = ?", (target_id,))
-            result = cursor.fetchone()
-            current_leaked = result[0] if result else 0
-            
-            await message.reply(
-                f'✅ Спасибо учтено!\n'
-                f'👤 Пользователь: {target_user.first_name}\n'
-                f'💰 Всего слито скаммеров: {current_leaked}\n\n'
-                f'🙏 Благодарим за помощь в борьбе со скамом!'
-            )
-        else:
-            await message.reply('⚠️ Ответьте на сообщение пользователя, которому хотите сказать спасибо')
-            
-    except Exception as e:
-        logger.error(f"Ошибка в thanks_command: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
-# ========== КОМАНДА АПЕЛЛЯЦИЙ ==========
-@app.on_message(command_filter(['appeals', 'апелляции']) & filters.private)
-async def view_appeals_command(app: Client, message: Message):
-    """Просмотр апелляций"""
-    try:
-        user_id = message.from_user.id
-        status = check_status(user_id)
-        
-        if not status or status not in (2, 3, 4, 5):
-            await message.reply('⚠️ У вас нет прав для просмотра апелляций')
-            return
-        
-        appeals = get_pending_appeals()
-        
-        if not appeals:
-            await message.reply("📋 <b>Список апелляций</b>\n\n✅ <i>Нет ожидающих апелляций</i>")
-            return
-        
-        text = "📋 <b>Ожидающие апелляции:</b>\n\n"
-        
-        buttons = []
-        for appeal in appeals:
-            appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
-            
-            try:
-                user = await app.get_users(appeal_user_id)
-                user_name = user.first_name
-            except:
-                user_name = f"ID: {appeal_user_id}"
-            
-            short_text = appeal_text[:50] + "..." if len(appeal_text) > 50 else appeal_text
-            
-            text += f"🔹 <b>Апелляция #{appeal_id}</b>\n"
-            text += f"👤 <b>Пользователь:</b> {user_name}\n"
-            text += f"📅 <b>Дата:</b> {created_at}\n"
-            text += f"📝 <b>Текст:</b> {short_text}\n\n"
-            
-            buttons.append([
-                InlineKeyboardButton(
-                    f"📝 Рассмотреть апелляцию #{appeal_id}",
-                    callback_data=f"view_appeal_{appeal_id}"
-                )
-            ])
-        
-        keyboard = InlineKeyboardMarkup(buttons)
-        await message.reply(text, reply_markup=keyboard)
-        
-    except Exception as e:
-        logger.error(f"Ошибка в view_appeals_command: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
 # ========== КОМАНДЫ АДМИНИСТРАЦИИ С ПРЕФИКСОМ + ==========
 def plus_command_filter(commands):
     """Фильтр для команд с префиксом +"""
@@ -1303,689 +711,30 @@ def plus_command_filter(commands):
     
     return PlusFilter(commands)
 
-@app.on_message(plus_command_filter(["ВыдатьСоздателя", "ВыдатьПрезидента", "ВыдатьАдмина", "ВыдатьСтажера", "ВыдатьДиректора", "ВыдатьГаранта"]))
-async def promote_handler(app, message: Message):
-    """Выдача ролей"""
-    try:
-        user_id = message.from_user.id
-        owner = check_owner(user_id)
-        status = check_status(user_id)
-        
-        if not owner and status not in [4, 5]:
-            await message.reply('❌ Нет прав')
-            return
-
+# ========== КОМАНДЫ СНЯТИЯ РОЛЕЙ С ПРЕФИКСОМ - ==========
+def minus_command_filter(commands):
+    """Фильтр для команд с префиксом -"""
+    async def func(flt, client, message):
         text = message.text or ""
-        command = text.split()[0]
+        if not text:
+            return False
         
-        target_id = None
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-        else:
-            args = text.split()
-            if len(args) > 1:
-                try:
-                    target_user = await app.get_users(args[1])
-                    target_id = target_user.id
-                except:
-                    await message.reply('❌ Неверный юзер')
-                    return
-            else:
-                await message.reply('❌ Укажите пользователя')
-                return
-        
-        if command == "+ВыдатьСоздателя":
-            if owner:
-                admin_func(target_id, 5)
-                await message.reply('✅ Юзеру выдан создатель.')
-            else:
-                await message.reply('❌ Нет прав')
-
-        elif command == "+ВыдатьПрезидента":
-            if owner:
-                admin_func(target_id, 4)
-                await message.reply('✅ Юзеру выдан президент.')
-            else:
-                await message.reply('❌ Нет прав')
-                
-        elif command == "+ВыдатьДиректора":
-            if owner or status in [4, 5]:
-                admin_func(target_id, 3)
-                await message.reply('✅ Юзеру выдан директор.')
-            else:
-                await message.reply('❌ Нет прав')
-                
-        elif command == "+ВыдатьАдмина":
-            if owner or status in [4, 5]:
-                admin_func(target_id, 2)
-                await message.reply('✅ Юзеру выдан администратор.')
-            else:
-                await message.reply('❌ Нет прав')
-                
-        elif command == "+ВыдатьСтажера":
-            if owner or status in [4, 5]:
-                args = text.split()
-                if len(args) >= 2:
-                    if message.reply_to_message:
-                        kurator = args[1]
-                        try:
-                            if kurator.isdigit():
-                                cursor.execute('INSERT INTO admins(id, status, kurator) VALUES (?, ?, ?)', 
-                                              (target_id, 1, int(kurator)))
-                            elif kurator.startswith('@'):
-                                kurator_user = await app.get_users(kurator)
-                                if kurator_user:
-                                    cursor.execute('INSERT INTO admins(id, status, kurator) VALUES (?, ?, ?)', 
-                                                  (target_id, 1, kurator_user.id))
-                                else:
-                                    await message.reply('❌ Куратор не найден')
-                                    return
-                            connection.commit()
-                            await message.reply('✅ Стажер с куратором выдан')
-                        except Exception as e:
-                            logger.error(f"Ошибка выдачи стажера: {e}")
-                            await message.reply('❌ Ошибка выдачи стажера')
-                    else:
-                        await message.reply('🚫 Используйте ответом на сообщение: +ВыдатьСтажера @юзкуратора')
-                else:
-                    await message.reply('🚫 Формат: +ВыдатьСтажера @юзстажера @юзкуратора')
-            else:
-                await message.reply('❌ Нет прав')
-
-        elif command == "+ВыдатьГаранта":
-            if owner or status in [5]:
-                try:
-                    cursor.execute('INSERT OR IGNORE INTO garants(id) VALUES(?)', (target_id,))
-                    connection.commit()
-                    await message.reply('✅ Гарант успешно выдан.')
-                except Exception as e:
-                    logger.error(f"Ошибка выдачи гаранта: {e}")
-                    await message.reply('❌ Ошибка выдачи гаранта')
-            else:
-                await message.reply('❌ Нет прав.')
-                
-    except Exception as e:
-        logger.error(f"Ошибка в promote_handler: {e}")
-        await message.reply(f'❌ Ошибка: {str(e)}')
-
-# ========== ОБРАБОТКА КОЛБЭКОВ ==========
-@app.on_callback_query(filters.regex(r'^scam_type_'))
-async def scam_type_callback(app: Client, callback_query: CallbackQuery):
-    """Обработка выбора типа скама"""
-    try:
-        data = callback_query.data
-        parts = data.split('_')
-        
-        if len(parts) < 4:
-            await callback_query.answer("❌ Ошибка данных", show_alert=True)
-            return
-        
-        scam_type = int(parts[2])  # 1 = возможно скаммер, 2 = скамер
-        target_user_id = int(parts[3])
-        
-        user_id = callback_query.from_user.id
-        
-        if user_id not in user_appeals:
-            await callback_query.answer("❌ Сессия истекла", show_alert=True)
-            return
-        
-        data = user_appeals[user_id]
-        if data['action'] != 'scam' or 'target_id' not in data:
-            await callback_query.answer("❌ Неверный шаг", show_alert=True)
-            return
-        
-        target_id = data['target_id']
-        reason = data['reason']
-        proof = data['proof']
-        
-        if scam_func(target_id, proof, reason, scam_type, user_id):
-            try:
-                target_user = await app.get_users(target_id)
-                target_name = target_user.first_name
-            except:
-                target_name = f"ID: {target_id}"
+        for cmd in flt.commands:
+            if text.startswith(f"-{cmd}") or text.startswith(f"-{cmd} "):
+                return True
+        return False
+    
+    class MinusFilter(filters.Filter):
+        def __init__(self, commands):
+            self.commands = commands
             
-            scam_type_text = "⚠️ Возможно скаммер" if scam_type == 1 else "❗ СКАМ"
-            
-            await callback_query.edit_message_text(
-                f"✅ <b>Пользователь добавлен в базу скаммеров!</b>\n\n"
-                f"👤 <b>Пользователь:</b> {target_name}\n"
-                f"🆔 <b>ID:</b> <code>{target_id}</code>\n"
-                f"📝 <b>Причина:</b> {reason}\n"
-                f"🔗 <b>Пруфы:</b> {proof}\n"
-                f"🎯 <b>Тип:</b> {scam_type_text}\n"
-                f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
-            )
-            
-            del user_appeals[user_id]
-        else:
-            await callback_query.answer("❌ Ошибка при добавлении в базу скаммеров", show_alert=True)
-        
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"Ошибка в scam_type_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+        async def __call__(self, client, message):
+            return await func(self, client, message)
+    
+    return MinusFilter(commands)
 
-@app.on_callback_query(filters.regex(r'^mute_'))
-async def mute_time_callback(app: Client, callback_query: CallbackQuery):
-    """Обработка мута"""
-    try:
-        data = callback_query.data
-        parts = data.split('_')
-        
-        if len(parts) < 3:
-            await callback_query.answer("❌ Ошибка данных", show_alert=True)
-            return
-        
-        time_str = parts[1]
-        target_user_id = int(parts[2])
-        
-        try:
-            target_user = await app.get_users(target_user_id)
-            target_name = target_user.first_name
-        except:
-            target_name = f"ID: {target_user_id}"
-        
-        chat_id = callback_query.message.chat.id
-        
-        admin_id = callback_query.from_user.id
-        status = check_status(admin_id)
-        
-        if not status or status not in (2, 3, 4, 5):
-            await callback_query.answer("⚠️ У вас нет прав", show_alert=True)
-            return
-        
-        target_status = check_status(target_user_id)
-        if target_status and target_status >= 2:
-            await callback_query.answer("⚠️ Нельзя мутить администраторов", show_alert=True)
-            return
-        
-        permissions = ChatPermissions(
-            can_send_messages=False,
-            can_send_media_messages=False,
-            can_send_other_messages=False,
-            can_add_web_page_previews=False
-        )
-        
-        if time_str == "permanent":
-            mute_until = datetime.now() + timedelta(days=31)
-            time_text = "навсегда"
-        else:
-            minutes = int(time_str)
-            mute_until = datetime.now() + timedelta(minutes=minutes)
-            
-            if minutes < 60:
-                time_text = f"на {minutes} минут"
-            elif minutes < 1440:
-                hours = minutes // 60
-                time_text = f"на {hours} час{'а' if 2 <= hours % 10 <= 4 and not 10 <= hours <= 20 else ''}"
-            else:
-                days = minutes // 1440
-                time_text = f"на {days} день{'я' if 2 <= days % 10 <= 4 and not 10 <= days <= 20 else 'ей'}"
-        
-        try:
-            await app.restrict_chat_member(chat_id, target_user_id, permissions, until_date=mute_until)
-            
-            await callback_query.edit_message_text(
-                f'✅ <b>Пользователь замучен</b>\n\n'
-                f'👤 <b>Пользователь:</b> {target_name}\n'
-                f'⏰ <b>Время:</b> {time_text}\n'
-                f'👮 <b>Администратор:</b> {callback_query.from_user.mention}\n\n'
-                f'<i>Чат для оффтопа: @LineReports</i>'
-            )
-            
-        except ChatAdminRequired:
-            await callback_query.answer("❌ У бота нет прав администратора", show_alert=True)
-        except Exception as e:
-            logger.error(f"Ошибка мута: {e}")
-            await callback_query.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
-            
-    except Exception as e:
-        logger.error(f"Ошибка в mute_time_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^setcountry_'))
-async def set_country_callback(app: Client, callback_query: CallbackQuery):
-    """Установка страны"""
-    try:
-        country_name = callback_query.data.split('_', 1)[1].replace('_', ' ')
-        
-        user_id = callback_query.from_user.id
-        set_user_country(user_id, country_name)
-        
-        await callback_query.answer(f"✅ Страна установлена: {country_name}", show_alert=True)
-        
-        await callback_query.edit_message_text(
-            f"✅ Ваша страна установлена: {country_name}\n\n"
-            f"Теперь вы можете проверить свой профиль командой /check или через меню."
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка установки страны: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^cancel_country$'))
-async def cancel_country_callback(app: Client, callback_query: CallbackQuery):
-    """Отмена страны"""
-    await callback_query.edit_message_text("❌ Выбор страны отменен.")
-
-@app.on_callback_query(filters.regex(r'^change_country$'))
-async def change_country_callback(app: Client, callback_query: CallbackQuery):
-    """Смена страны"""
-    try:
-        buttons = []
-        row = []
-        countries_list = list(COUNTRIES.items())
-        
-        for i, (name, code) in enumerate(countries_list):
-            row.append(InlineKeyboardButton(name, callback_data=f"setcountry_{name}"))
-            if len(row) == 2 or i == len(countries_list) - 1:
-                buttons.append(row)
-                row = []
-        
-        buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_country")])
-        
-        keyboard = InlineKeyboardMarkup(buttons)
-        
-        await callback_query.message.edit_text(
-            "🌍 <b>Выберите вашу страну:</b>\n\n"
-            "Это поможет другим пользователям узнать, откуда вы.\n"
-            "Страна будет отображаться в вашем профиле под репутацией.",
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка выбора страны: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^appeal_'))
-async def appeal_callback(app: Client, callback_query: CallbackQuery):
-    """Апелляция"""
-    try:
-        user_id = int(callback_query.data.split('_')[1])
-        
-        if callback_query.from_user.id != user_id:
-            await callback_query.answer("❌ Это не ваша кнопка апелляции", show_alert=True)
-            return
-        
-        cursor.execute('SELECT id FROM appeals WHERE user_id = ? AND status = "pending"', (user_id,))
-        existing_appeal = cursor.fetchone()
-        
-        if existing_appeal:
-            await callback_query.answer("❌ У вас уже есть ожидающая апелляция", show_alert=True)
-            return
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Отменить апелляцию", callback_data="cancel_appeal")]
-        ])
-        
-        await callback_query.message.reply(
-            "Вы начали процесс апелляции\n\n"
-            "Опишите подробно причины, по которой вы считаете, что вы не должны быть в базе скамеров. а также оставьте свои контактые данные @юз\n\n"
-            "❌ Нажмите кнопку ниже для отмены процесса апеляции",
-            reply_markup=keyboard
-        )
-        
-        user_appeals[user_id] = {
-            'action': 'appeal',
-            'step': 'text'
-        }
-        
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"Ошибка в appeal_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^cancel_appeal$'))
-async def cancel_appeal_callback(app: Client, callback_query: CallbackQuery):
-    """Отмена апелляции"""
-    try:
-        user_id = callback_query.from_user.id
-        
-        if user_id in user_appeals and user_appeals[user_id]['action'] == 'appeal':
-            del user_appeals[user_id]
-        
-        await callback_query.message.edit_text("❌ Процесс апелляции отменен.")
-        await callback_query.answer("Апелляция отменена")
-        
-    except Exception as e:
-        logger.error(f"Ошибка в cancel_appeal_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^view_appeal_'))
-async def view_appeal_callback(app: Client, callback_query: CallbackQuery):
-    """Просмотр апелляции"""
-    try:
-        appeal_id = int(callback_query.data.split('_')[2])
-        
-        cursor.execute('SELECT * FROM appeals WHERE id = ?', (appeal_id,))
-        appeal = cursor.fetchone()
-        
-        if not appeal:
-            await callback_query.answer("❌ Апелляция не найдена", show_alert=True)
-            return
-        
-        appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
-        
-        try:
-            user = await app.get_users(appeal_user_id)
-            user_name = user.first_name
-            user_mention = user.mention if user.first_name else f"ID: {appeal_user_id}"
-        except:
-            user_name = f"ID: {appeal_user_id}"
-            user_mention = f"ID: {appeal_user_id}"
-        
-        admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(appeal_user_id)
-        
-        text = f"📋 <b>Апелляция #{appeal_id}</b>\n\n"
-        text += f"👤 <b>Пользователь:</b> {user_mention}\n"
-        text += f"🆔 <b>ID:</b> <code>{appeal_user_id}</code>\n"
-        
-        if scammer_data:
-            reason = scammer_data[2] if len(scammer_data) > 2 else "Не указана"
-            proof = scammer_data[1] if len(scammer_data) > 1 else "#"
-            text += f"⚠️ <b>Причина скама:</b> {reason}\n"
-            text += f"🔗 <b>Пруфы:</b> <a href='{proof}'>Ссылка</a>\n"
-        
-        text += f"📅 <b>Дата подачи:</b> {created_at}\n"
-        text += f"📝 <b>Текст апелляции:</b>\n<code>{appeal_text}</code>\n\n"
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_appeal_{appeal_id}"),
-                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_appeal_{appeal_id}")
-            ],
-            [
-                InlineKeyboardButton("👤 Проверить профиль", callback_data=f"check_{appeal_user_id}")
-            ],
-            [
-                InlineKeyboardButton("🔙 Назад к списку", callback_data="back_to_appeals")
-            ]
-        ])
-        
-        await callback_query.edit_message_text(text, reply_markup=keyboard)
-        
-    except Exception as e:
-        logger.error(f"Ошибка в view_appeal_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^(approve|reject)_appeal_'))
-async def handle_appeal_decision(app: Client, callback_query: CallbackQuery):
-    """Решение по апелляции"""
-    try:
-        action = callback_query.data.split('_')[0]
-        appeal_id = int(callback_query.data.split('_')[2])
-        
-        cursor.execute('SELECT * FROM appeals WHERE id = ?', (appeal_id,))
-        appeal = cursor.fetchone()
-        
-        if not appeal:
-            await callback_query.answer("❌ Апелляция не найдена", show_alert=True)
-            return
-        
-        appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
-        
-        if action == "approve":
-            cursor.execute('DELETE FROM scammers WHERE id = ?', (appeal_user_id,))
-            new_status = "approved"
-            status_text = "✅ Одобрена"
-            user_message = "✅ Ваша апелляция одобрена! Вы удалены из базы скаммеров."
-        else:
-            new_status = "rejected"
-            status_text = "❌ Отклонена"
-            user_message = "❌ Ваша апелляция отклонена. Вы остаетесь в базе скаммеров."
-        
-        update_appeal_status(appeal_id, new_status, callback_query.from_user.id)
-        
-        try:
-            await app.send_message(
-                appeal_user_id,
-                f"📋 <b>Решение по вашей апелляции</b>\n\n"
-                f"{user_message}\n\n"
-                f"📅 <b>Дата решения:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
-                f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
-            )
-        except:
-            pass
-        
-        await callback_query.edit_message_text(
-            f"📋 <b>Апелляция #{appeal_id}</b>\n\n"
-            f"👮 <b>Решение принято:</b> {status_text}\n"
-            f"👤 <b>Пользователь:</b> ID: {appeal_user_id}\n"
-            f"📅 <b>Дата решения:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
-            f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
-        )
-        
-        await callback_query.answer(f"Апелляция {status_text}", show_alert=True)
-        
-    except Exception as e:
-        logger.error(f"Ошибка в handle_appeal_decision: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^back_to_appeals$'))
-async def back_to_appeals_callback(app: Client, callback_query: CallbackQuery):
-    """Назад к апелляциям"""
-    try:
-        await view_appeals_command(app, callback_query.message)
-    except:
-        await callback_query.answer("❌ Ошибка возврата", show_alert=True)
-
-@app.on_callback_query(filters.regex(r'^check_'))
-async def check_callback(app: Client, callback_query: CallbackQuery):
-    """Проверка по кнопке"""
-    try:
-        user_id_to_check = int(callback_query.data.split('_')[1])
-        
-        photo, text = await check_user_func(app, callback_query.message, user_id_to_check)
-        
-        if text:
-            try:
-                user = await app.get_users(user_id_to_check)
-                profile_link = f'https://t.me/{user.username}' if user.username else f'tg://user?id={user_id_to_check}'
-            except:
-                profile_link = f'tg://user?id={user_id_to_check}'
-            
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("👥 Профиль", url=profile_link)]
-            ])
-            
-            if photo:
-                await callback_query.message.reply_photo(photo, caption=text, reply_markup=keyboard)
-            else:
-                await callback_query.message.reply(text, reply_markup=keyboard)
-            
-            await callback_query.answer("✅ Информация отправлена")
-        else:
-            await callback_query.answer("❌ Не удалось получить информацию", show_alert=True)
-            
-    except Exception as e:
-        logger.error(f"Ошибка в check_callback: {e}")
-        await callback_query.answer("❌ Произошла ошибка", show_alert=True)
-
-# ========== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ==========
-@app.on_message(filters.private & filters.text)
-async def handle_text_messages(app: Client, message: Message):
-    """Обработка текстовых сообщений в ЛС"""
-    try:
-        text = message.text or ""
-        
-        # Пропускаем команды (они обрабатываются отдельно)
-        if text.startswith('/') or text.startswith('!') or text.startswith('.') or text.startswith('-') or text.startswith('+'):
-            return
-        
-        user_id = message.from_user.id
-        
-        # Обработка апелляций
-        if user_id in user_appeals:
-            data = user_appeals[user_id]
-            
-            if data['action'] == 'appeal' and data['step'] == 'text':
-                appeal_id = create_appeal(user_id, text)
-                
-                if appeal_id:
-                    del user_appeals[user_id]
-                    
-                    await message.reply(
-                        f"✅ <b>Апелляция подана успешно!</b>\n\n"
-                        f"📋 <b>Номер апелляции:</b> #{appeal_id}\n"
-                        f"📝 <b>Ваш текст:</b>\n<code>{text[:100]}...</code>\n\n"
-                        f"ℹ️ Администраторы рассмотрят вашу апелляцию в ближайшее время.\n"
-                        f"ℹ️ Вы получите уведомление о результате."
-                    )
-                    
-                    try:
-                        cursor.execute('SELECT id FROM admins WHERE status >= 2')
-                        admins = cursor.fetchall()
-                        
-                        for admin in admins:
-                            try:
-                                await app.send_message(
-                                    admin[0],
-                                    f"📣 <b>Новая апелляция!</b>\n\n"
-                                    f"📋 <b>Апелляция #{appeal_id}</b>\n"
-                                    f"👤 <b>Пользователь:</b> ID: {user_id}\n"
-                                    f"📝 <b>Текст:</b> {text[:100]}...\n\n"
-                                    f"ℹ️ Используйте /appeals для просмотра"
-                                )
-                            except:
-                                continue
-                    except:
-                        pass
-                    
-                else:
-                    await message.reply('❌ Ошибка при создании апелляции')
-            
-            return
-        
-        # Обработка меню
-        if text == "Мой профиль 🆔":
-            user_id = message.from_user.id
-            
-            cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-            if cursor.fetchone() is None:
-                cursor.execute("INSERT INTO users(id) VALUES (?)", (user_id,))
-                cursor.execute("INSERT OR IGNORE INTO user_countries(user_id, country) VALUES (?, ?)", (user_id, 'Не указана'))
-                connection.commit()
-            
-            msg = await message.reply('🔎 Проверяется в базе данных...')
-            
-            photo, profile_text = await check_user_func(app, message, user_id)
-            
-            if profile_text:
-                buttons = []
-                buttons.append([InlineKeyboardButton("🌍 Изменить страну", callback_data="change_country")])
-                
-                admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(user_id)
-                if scammer_data:
-                    buttons.append([InlineKeyboardButton("📝 Подать апелляцию", 
-                                                       callback_data=f"appeal_{user_id}")])
-                
-                keyboard = InlineKeyboardMarkup(buttons) if buttons else None
-                
-                if photo:
-                    await message.reply_photo(photo, caption=profile_text, reply_markup=keyboard)
-                else:
-                    await message.reply(profile_text, reply_markup=keyboard)
-            
-            await msg.delete()
-            
-        elif text == "Слить скаммера 😡":
-            button = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        text="✅ Предложка",
-                        url='https://t.me/LineReports'
-                    )
-                ]
-            ])
-            await message.reply("❗ Чтобы слить скамера переходите в предложку", reply_markup=button)
-
-        elif text == "Частые вопросы ❓":
-            await message.reply("📚 Частые вопросы:\n\n1. Как проверить пользователя?\n- Используйте команду /чек или кнопку 'Мой профиль'\n\n2. Как стать гарантом?\n- Обратитесь к администраторам базы\n\n3. Как добавить скаммера?\n- Используйте команду /scam")
-
-        elif text == "Гаранты 🔥":
-            cursor.execute('SELECT id FROM garants')
-            garants = cursor.fetchall()
-            if not garants:
-                await message.reply("❌ Гарантов на данный момент нет")
-                return
-
-            buttons = []
-            for garant in garants:
-                try:
-                    user = await app.get_users(garant[0])
-                    first_name = user.first_name
-                    username = getattr(user, 'username', 'Нету!')
-
-                    buttons.append(
-                        [InlineKeyboardButton(text=f"✅ {first_name} : @{username}",
-                                              callback_data=f"check_{user.id}")]
-                    )
-                except:
-                    continue
-
-            reply_markup = InlineKeyboardMarkup(buttons)
-            await message.reply(f"✅ Все гаранты базы: ({len(garants)}):", reply_markup=reply_markup)
-
-        elif text == "Волонтёры 🌴":
-            cursor.execute('SELECT id FROM admins')
-            admins = cursor.fetchall()
-
-            if not admins:
-                await message.reply("❌ Волонтеров на данный момент нет")
-                return
-
-            buttons = []
-            for admin_user in admins:
-                try:
-                    user = await app.get_users(admin_user[0])
-                    first_name = user.first_name
-                    username = getattr(user, 'username', 'Нету!')
-
-                    buttons.append(
-                        [InlineKeyboardButton(text=f"🌴 {first_name} : @{username}",
-                                              callback_data=f"check_{user.id}")]
-                    )
-                except:
-                    continue
-
-            if len(buttons) > 100:
-                await message.reply("Слишком много волонтёров для отображения.")
-                return
-
-            reply_markup = InlineKeyboardMarkup(buttons)
-            await message.reply(f"🌴 Все волонтеры базы: ({len(admins)})", reply_markup=reply_markup)
-
-        elif text == "Статистика 📊":
-            cursor.execute('SELECT id FROM scammers')
-            scammers = cursor.fetchall()
-            scams_count = len(scammers)
-
-            cursor.execute('SELECT id FROM users')
-            users = cursor.fetchall()
-            users_count = len(users)
-            
-            cursor.execute('SELECT id FROM admins')
-            admins_count = len(cursor.fetchall())
-            
-            cursor.execute('SELECT id FROM garants')
-            garants_count = len(cursor.fetchall())
-            
-            await message.reply(f'''
-📊 Статистика бота:
-🔎 Слито скаммеров: {scams_count}  
-👥 Пользователей бота: {users_count}
-🌴 Волонтёров: {admins_count}
-🔥 Гарантов: {garants_count}
-''')
-
-    except Exception as e:
-        logger.error(f"Ошибка в handle_text_messages: {e}")
-
-# ========== ЗАПУСК БОТА ==========
-if __name__ == "__main__":
+# ========== ЗАПУСК БОТА И РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ==========
+def main():
     try:
         print("=" * 50)
         print("🔄 Инициализация Line Anti Scam Database...")
@@ -1996,6 +745,1603 @@ if __name__ == "__main__":
         print("✅ База данных инициализирована")
         print("🤖 Запуск бота...")
         print("=" * 50)
+        
+        # Проверяем наличие файла сессии
+        session_file = "line_anti_scam.session"
+        if os.path.exists(session_file):
+            print(f"⚠️ Найден файл сессии: {session_file}")
+            try:
+                os.remove(session_file)
+                print("✅ Файл сессии удален")
+            except Exception as e:
+                print(f"⚠️ Не удалось удалить файл сессии: {e}")
+        
+        # Создаем клиент с уникальным именем
+        app = Client(
+            "line_anti_scam_bot",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=BOT_TOKEN,
+            workers=NUM_WORKERS,
+            in_memory=True  # Используем сессию в памяти
+        )
+
+        # ========== КОМАНДА CHECK (РАБОТАЕТ В ЧАТАХ И ЛС, ВКЛЮЧАЯ БЕЗ ПРЕФИКСА) ==========
+        @app.on_message(command_filter(['check', 'чек', 'проверить']))
+        async def check_user_command(app: Client, message: Message):
+            """Проверка пользователя - работает в чатах и ЛС, включая без префикса"""
+            try:
+                user_id = message.from_user.id
+                
+                # Проверка лимитов
+                status = check_status(user_id)
+                if status is None or status < 1:
+                    MAX_REQUESTS = 10
+                    TIME_LIMIT = 30 * 60
+                    REQUEST_INTERVAL = 10
+                    
+                    current_time = time.time()
+                    if user_id not in user_requests:
+                        user_requests[user_id] = []
+                    
+                    user_requests[user_id] = [t for t in user_requests[user_id] if current_time - t < TIME_LIMIT]
+                    
+                    if len(user_requests[user_id]) >= MAX_REQUESTS:
+                        await message.reply('⚠️ Вы превысили лимит запросов. Пожалуйста, подождите 30 минут.')
+                        return
+                    
+                    if user_requests[user_id] and (current_time - user_requests[user_id][-1] < REQUEST_INTERVAL):
+                        await message.reply('⚠️ Пожалуйста, подождите 10 секунд перед следующим запросом.')
+                        return
+                    
+                    user_requests[user_id].append(current_time)
+                
+                # Определяем ID для проверки
+                user_id_to_check = None
+                
+                if message.reply_to_message:
+                    user_id_to_check = message.reply_to_message.from_user.id
+                else:
+                    text = message.text or ""
+                    
+                    # Определяем, какая команда использована
+                    command_used = None
+                    for cmd in ['check', 'чек', 'проверить']:
+                        if text.lower().startswith(cmd.lower()):
+                            command_used = cmd
+                            break
+                    
+                    # Проверяем, является ли это командой без префикса
+                    is_prefixless = False
+                    if command_used:
+                        # Если текст начинается с команды и нет префикса перед ней
+                        if not any(text.startswith(prefix + command_used) for prefix in ['/', '!', '.', '-']):
+                            is_prefixless = True
+                    
+                    if is_prefixless:
+                        # Команда без префикса
+                        if text.lower().strip() == command_used.lower():
+                            # Просто "чек" без аргументов - проверяем себя
+                            user_id_to_check = message.from_user.id
+                        else:
+                            # "чек ми" или "чек аргумент"
+                            args = text[len(command_used):].strip()
+                            if args:
+                                first_arg = args.split()[0].strip()
+                                if first_arg.lower() in ['ми', 'меня', 'me', 'myself']:
+                                    user_id_to_check = message.from_user.id
+                                elif first_arg.isdigit():
+                                    user_id_to_check = int(first_arg)
+                                elif first_arg.startswith('@'):
+                                    try:
+                                        user_obj = await app.get_users(first_arg)
+                                        user_id_to_check = user_obj.id
+                                    except:
+                                        await message.reply('⚠️ Пользователь не найден.')
+                                        return
+                                else:
+                                    # Если аргумент не распознан, проверяем себя
+                                    user_id_to_check = message.from_user.id
+                            else:
+                                user_id_to_check = message.from_user.id
+                    else:
+                        # Команда с префиксом
+                        for prefix in ['/', '!', '.', '-']:
+                            for cmd in ['check', 'чек', 'проверить']:
+                                if text.startswith(f"{prefix}{cmd}"):
+                                    text = text[len(f"{prefix}{cmd}"):].strip()
+                                    break
+                        
+                        # Удаляем упоминание бота если есть
+                        if f"@{app.me.username}" in text:
+                            text = text.replace(f"@{app.me.username}", "").strip()
+                        
+                        if text:
+                            arg = text.split()[0].strip() if text else ""
+                            if arg.lower() in ['ми', 'меня', 'me']:
+                                user_id_to_check = message.from_user.id
+                            elif arg.isdigit():
+                                user_id_to_check = int(arg)
+                            elif arg.startswith('@'):
+                                try:
+                                    user_obj = await app.get_users(arg)
+                                    user_id_to_check = user_obj.id
+                                except:
+                                    await message.reply('⚠️ Пользователь не найден.')
+                                    return
+                            else:
+                                # Если аргумент не распознан, проверяем себя
+                                user_id_to_check = message.from_user.id
+                        else:
+                            user_id_to_check = message.from_user.id
+                
+                if not user_id_to_check:
+                    await message.reply('⚠️ Не указан пользователь для проверки')
+                    return
+                
+                msg = await message.reply('🔎 Проверяется в базе данных...')
+                photo, text_result = await check_user_func(app, message, user_id_to_check)
+                
+                if not text_result:
+                    await msg.edit_text('❌ Не удалось получить информацию о пользователе')
+                    return
+                
+                try:
+                    user = await app.get_users(user_id_to_check)
+                    profile_link = f'https://t.me/{user.username}' if user.username else f'tg://user?id={user_id_to_check}'
+                except:
+                    profile_link = f'tg://user?id={user_id_to_check}'
+                
+                admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(user_id_to_check)
+                
+                buttons = []
+                buttons.append([InlineKeyboardButton("👥 Профиль", url=profile_link)])
+                
+                # В чатах показываем меньше кнопок
+                if message.chat.type == enums.ChatType.PRIVATE:
+                    if user_id_to_check == message.from_user.id:
+                        buttons.append([InlineKeyboardButton("🌍 Изменить страну", callback_data="change_country")])
+                    
+                    if scammer_data and user_id_to_check == message.from_user.id:
+                        buttons.append([InlineKeyboardButton("📝 Подать апелляцию", 
+                                                           callback_data=f"appeal_{user_id_to_check}")])
+                
+                keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+                
+                try:
+                    if photo:
+                        await message.reply_photo(
+                            photo=photo,
+                            caption=text_result,
+                            reply_markup=keyboard
+                        )
+                    else:
+                        await message.reply(
+                            text_result,
+                            reply_markup=keyboard
+                        )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки результата: {e}")
+                    await message.reply(text_result, reply_markup=keyboard)
+                
+                await msg.delete()
+                
+            except Exception as e:
+                logger.error(f"Ошибка в check_user_command: {e}")
+                await message.reply(f'❌ Ошибка при проверке: {str(e)}')
+
+        # ========== КОМАНДА START ==========
+        @app.on_message(command_filter(['start']))
+        async def start_command(app: Client, message: Message):
+            """Команда старта"""
+            try:
+                keyboard = ReplyKeyboardMarkup(
+                    [
+                        ["Мой профиль 🆔", "Слить скаммера 😡", "Частые вопросы ❓"],
+                        ["Гаранты 🔥", "Волонтёры 🌴", "Статистика 📊"]
+                    ],
+                    resize_keyboard=True
+                )
+                await message.reply('🔎 Приветствую в скам базе Line Anti Scam. Выбери что ты хочешь сделать:', reply_markup=keyboard)
+                
+                user_id = message.from_user.id
+                cursor.execute("INSERT OR IGNORE INTO users(id) VALUES (?)", (user_id,))
+                cursor.execute("INSERT OR IGNORE INTO user_countries(user_id, country) VALUES (?, ?)", (user_id, 'Не указана'))
+                connection.commit()
+                
+            except Exception as e:
+                logger.error(f"Ошибка в start_command: {e}")
+
+        # ========== КОМАНДА SCAM (РАБОТАЕТ В ЧАТАХ И ЛС) ==========
+        @app.on_message(command_filter(['scam', 'скам']))
+        async def scam_command(app: Client, message: Message):
+            """Команда добавления скаммера - работает в чатах и ЛС"""
+            try:
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                # СТАЖЕРЫ МОГУТ ДОБАВЛЯТЬ СКАММЕРОВ
+                if not status or status not in (1, 2, 3, 4, 5):
+                    await message.reply('⚠️ У вас нет прав для использования этой команды')
+                    return
+                
+                # Определяем пользователя для добавления
+                target_user_id = None
+                target_user_name = "Неизвестный"
+                proof_link = ""
+                reason = ""
+                
+                # Проверяем, используется ли команда с ответом на сообщение
+                if message.reply_to_message:
+                    # Работаем в чате с ответом на сообщение
+                    target_user_id = message.reply_to_message.from_user.id
+                    try:
+                        target_user = await app.get_users(target_user_id)
+                        target_user_name = target_user.first_name or f"ID: {target_user_id}"
+                    except:
+                        target_user_name = f"ID: {target_user_id}"
+                    
+                    text = message.text or ""
+                    # Удаляем префикс команды
+                    for prefix in ['/', '!', '.', '-']:
+                        if text.startswith(f"{prefix}scam"):
+                            text = text[len(f"{prefix}scam"):].strip()
+                            break
+                        elif text.startswith(f"{prefix}скам"):
+                            text = text[len(f"{prefix}скам"):].strip()
+                            break
+                    
+                    if text:
+                        # Парсим аргументы: ссылка причина
+                        args = text.split()
+                        if len(args) >= 2:
+                            proof_link = args[0].strip()
+                            reason = ' '.join(args[1:]).strip()
+                        elif len(args) == 1:
+                            proof_link = args[0].strip()
+                            reason = "Не указана"
+                        else:
+                            # Если аргументов нет, запрашиваем их
+                            await message.reply('⚠️ Укажите ссылку на пруфы и причину через пробел\nПример: /scam https://example.com "Мошенничество"')
+                            return
+                    else:
+                        await message.reply('⚠️ Укажите ссылку на пруфы и причину через пробел\nПример: /scam https://example.com "Мошенничество"')
+                        return
+                else:
+                    # Работаем в ЛС или команда с аргументами
+                    text = message.text or ""
+                    # Удаляем префикс команды
+                    for prefix in ['/', '!', '.', '-']:
+                        if text.startswith(f"{prefix}scam"):
+                            text = text[len(f"{prefix}scam"):].strip()
+                            break
+                        elif text.startswith(f"{prefix}скам"):
+                            text = text[len(f"{prefix}скам"):].strip()
+                            break
+                    
+                    if not text:
+                        await message.reply('⚠️ Используйте: /scam ID/@username ссылка_на_пруфы причина\n\nПримеры:\n/scam 123456789 https://t.me/c/123/456 "Обман при продаже"\n/scam @username https://ibb.co/example "Мошенничество"')
+                        return
+                    
+                    # Парсим аргументы
+                    args = text.split()
+                    if len(args) < 3:
+                        await message.reply('⚠️ Недостаточно аргументов. Формат: /scam ID/@username ссылка_на_пруфы причина\n\nПричина должна быть в кавычках если содержит пробелы.')
+                        return
+                    
+                    target_input = args[0].strip()
+                    proof_link = args[1].strip()
+                    reason = ' '.join(args[2:]).strip()
+                    
+                    # Определяем ID пользователя
+                    if target_input.isdigit():
+                        target_user_id = int(target_input)
+                    elif target_input.startswith('@'):
+                        try:
+                            user_obj = await app.get_users(target_input)
+                            target_user_id = user_obj.id
+                        except:
+                            await message.reply('⚠️ Пользователь не найден')
+                            return
+                    elif 't.me/' in target_input:
+                        username = target_input.split('t.me/')[-1].split('/')[-1].split('?')[0]
+                        try:
+                            user_obj = await app.get_users(f"@{username}")
+                            target_user_id = user_obj.id
+                        except:
+                            await message.reply('⚠️ Пользователь не найден')
+                            return
+                    else:
+                        await message.reply('⚠️ Неверный формат. Используйте ID, @username или ссылку')
+                        return
+                    
+                    try:
+                        target_user = await app.get_users(target_user_id)
+                        target_user_name = target_user.first_name or f"ID: {target_user_id}"
+                    except:
+                        target_user_name = f"ID: {target_user_id}"
+                
+                if not target_user_id:
+                    await message.reply('⚠️ Не удалось определить ID пользователя')
+                    return
+                
+                # Проверяем, не пытаемся ли добавить администратора
+                target_status = check_status(target_user_id)
+                if target_status and target_status >= 1:  # Запрещаем добавлять стажеров и выше
+                    await message.reply('⚠️ Нельзя добавить администраторов базы в скам')
+                    return
+                
+                # Убираем кавычки если есть
+                if reason.startswith('"') and reason.endswith('"'):
+                    reason = reason[1:-1]
+                elif reason.startswith("'") and reason.endswith("'"):
+                    reason = reason[1:-1]
+                
+                # Проверяем, что ссылка не пустая (принимаем ЛЮБУЮ ссылку)
+                if not proof_link:
+                    proof_link = "#"
+                
+                # Создаем клавиатуру для выбора типа скама
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("⚠️ Возможно скаммер", callback_data=f"scam_type_1_{target_user_id}"),
+                        InlineKeyboardButton("❗ СКАМ", callback_data=f"scam_type_2_{target_user_id}")
+                    ]
+                ])
+                
+                # Сохраняем данные для callback
+                user_appeals[user_id] = {
+                    'action': 'scam',
+                    'target_id': target_user_id,
+                    'proof': proof_link,
+                    'reason': reason
+                }
+                
+                await message.reply(
+                    f'🎯 <b>Подтвердите добавление скаммера:</b>\n\n'
+                    f'👤 <b>Пользователь:</b> {target_user_name}\n'
+                    f'🆔 <b>ID:</b> <code>{target_user_id}</code>\n'
+                    f'📝 <b>Причина:</b> {reason}\n'
+                    f'🔗 <b>Пруфы:</b> {proof_link}\n\n'
+                    f'<b>Выберите тип скама:</b>\n'
+                    f'<b>⚠️ Возможно скаммер</b> - 75% шанс скама\n'
+                    f'<b>❗ СКАМ</b> - 100% шанс скама',
+                    reply_markup=keyboard
+                )
+                
+            except Exception as e:
+                logger.error(f"Ошибка в scam_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА NOSCAM (УДАЛИТЬ ИЗ БАЗЫ СКАММЕРОВ) ==========
+        @app.on_message(command_filter(['noscam', 'unscam', 'унскам', 'удалитьскам']))
+        async def noscam_command(app: Client, message: Message):
+            """Команда удаления пользователя из базы скаммеров"""
+            try:
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                # СТАЖЕРЫ МОГУТ УДАЛЯТЬ ИЗ БАЗЫ СКАММЕРОВ
+                if not status or status not in (1, 2, 3, 4, 5):
+                    await message.reply('⚠️ У вас нет прав для использования этой команды')
+                    return
+                
+                # Определяем пользователя для удаления
+                target_user_id = None
+                target_user_name = "Неизвестный"
+                
+                # Проверяем, используется ли команда с ответом на сообщение
+                if message.reply_to_message:
+                    # Работаем в чате с ответом на сообщение
+                    target_user_id = message.reply_to_message.from_user.id
+                    try:
+                        target_user = await app.get_users(target_user_id)
+                        target_user_name = target_user.first_name or f"ID: {target_user_id}"
+                    except:
+                        target_user_name = f"ID: {target_user_id}"
+                else:
+                    # Работаем в ЛС или команда с аргументами
+                    text = message.text or ""
+                    # Удаляем префикс команды
+                    for prefix in ['/', '!', '.', '-']:
+                        if text.startswith(f"{prefix}noscam"):
+                            text = text[len(f"{prefix}noscam"):].strip()
+                            break
+                        elif text.startswith(f"{prefix}unscam"):
+                            text = text[len(f"{prefix}unscam"):].strip()
+                            break
+                        elif text.startswith(f"{prefix}унскам"):
+                            text = text[len(f"{prefix}унскам"):].strip()
+                            break
+                        elif text.startswith(f"{prefix}удалитьскам"):
+                            text = text[len(f"{prefix}удалитьскам"):].strip()
+                            break
+                    
+                    if not text:
+                        await message.reply('⚠️ Используйте: /noscam ID/@username\n\nПримеры:\n/noscam 123456789\n/noscam @username')
+                        return
+                    
+                    # Определяем ID пользователя
+                    target_input = text.split()[0].strip()
+                    
+                    if target_input.isdigit():
+                        target_user_id = int(target_input)
+                    elif target_input.startswith('@'):
+                        try:
+                            user_obj = await app.get_users(target_input)
+                            target_user_id = user_obj.id
+                        except:
+                            await message.reply('⚠️ Пользователь не найден')
+                            return
+                    elif 't.me/' in target_input:
+                        username = target_input.split('t.me/')[-1].split('/')[-1].split('?')[0]
+                        try:
+                            user_obj = await app.get_users(f"@{username}")
+                            target_user_id = user_obj.id
+                        except:
+                            await message.reply('⚠️ Пользователь не найден')
+                            return
+                    else:
+                        await message.reply('⚠️ Неверный формат. Используйте ID, @username или ссылку')
+                        return
+                    
+                    try:
+                        target_user = await app.get_users(target_user_id)
+                        target_user_name = target_user.first_name or f"ID: {target_user_id}"
+                    except:
+                        target_user_name = f"ID: {target_user_id}"
+                
+                if not target_user_id:
+                    await message.reply('⚠️ Не удалось определить ID пользователя')
+                    return
+                
+                # Проверяем, есть ли пользователь в базе скаммеров
+                cursor.execute('SELECT * FROM scammers WHERE id = ?', (target_user_id,))
+                scammer_data = cursor.fetchone()
+                
+                if not scammer_data:
+                    await message.reply(f'⚠️ Пользователь {target_user_name} не найден в базе скаммеров')
+                    return
+                
+                # Удаляем пользователя из базы скаммеров
+                if delete_from_scammers(target_user_id):
+                    await message.reply(
+                        f'✅ <b>Пользователь удален из базы скаммеров!</b>\n\n'
+                        f'👤 <b>Пользователь:</b> {target_user_name}\n'
+                        f'🆔 <b>ID:</b> <code>{target_user_id}</code>\n'
+                        f'👮 <b>Администратор:</b> {message.from_user.mention}\n'
+                        f'📅 <b>Дата удаления:</b> {datetime.now().strftime("%d.%m.%Y %H:%M")}'
+                    )
+                else:
+                    await message.reply('❌ Ошибка при удалении пользователя из базы')
+                
+            except Exception as e:
+                logger.error(f"Ошибка в noscam_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА MUTE (РАБОТАЕТ В ЧАТАХ) ==========
+        @app.on_message(command_filter(['mute', 'мут']))
+        async def mute_command(app: Client, message: Message):
+            """Команда мута"""
+            try:
+                if message.chat.type not in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    await message.reply('⚠️ Эта команда работает только в группах')
+                    return
+                
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                # СТАЖЕРЫ МОГУТ МУТИТЬ
+                if not status or status not in (1, 2, 3, 4, 5):
+                    await message.reply('⚠️ Нет прав')
+                    return
+
+                if message.reply_to_message:
+                    target_user = message.reply_to_message.from_user
+                    user_id_target = target_user.id
+                    
+                    keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("5 мин", callback_data=f"mute_5_{user_id_target}"),
+                            InlineKeyboardButton("15 мин", callback_data=f"mute_15_{user_id_target}"),
+                            InlineKeyboardButton("30 мин", callback_data=f"mute_30_{user_id_target}")
+                        ],
+                        [
+                            InlineKeyboardButton("1 час", callback_data=f"mute_60_{user_id_target}"),
+                            InlineKeyboardButton("3 часа", callback_data=f"mute_180_{user_id_target}"),
+                            InlineKeyboardButton("12 часов", callback_data=f"mute_720_{user_id_target}")
+                        ],
+                        [
+                            InlineKeyboardButton("1 день", callback_data=f"mute_1440_{user_id_target}"),
+                            InlineKeyboardButton("3 дня", callback_data=f"mute_4320_{user_id_target}"),
+                            InlineKeyboardButton("7 дней", callback_data=f"mute_10080_{user_id_target}")
+                        ],
+                        [
+                            InlineKeyboardButton("Навсегда", callback_data=f"mute_permanent_{user_id_target}")
+                        ]
+                    ])
+                    
+                    await message.reply(
+                        f'⏰ Выберите время мута для пользователя {target_user.first_name}:',
+                        reply_markup=keyboard
+                    )
+                else:
+                    await message.reply('⚠️ Ответьте на сообщение пользователя, которого хотите замутить')
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в mute_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА ОФФТОП ==========
+        @app.on_message(command_filter(['оффтоп', 'офтоп', 'offtop']))
+        async def offtop_command(app: Client, message: Message):
+            """Команда оффтоп - удаляет сообщение и выдает мут на 30 минут"""
+            try:
+                if message.chat.type not in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    await message.reply('⚠️ Эта команда работает только в группах')
+                    return
+                
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                # СТАЖЕРЫ МОГУТ ИСПОЛЬЗОВАТЬ ОФФТОП
+                if not status or status not in (1, 2, 3, 4, 5):
+                    await message.reply('⚠️ Нет прав')
+                    return
+
+                if message.reply_to_message:
+                    target_user = message.reply_to_message.from_user
+                    user_id_target = target_user.id
+                    
+                    # Проверяем, не пытаемся ли замутить администратора
+                    target_status = check_status(user_id_target)
+                    if target_status and target_status >= 1:
+                        await message.reply('⚠️ Нельзя мутить администраторов')
+                        return
+                    
+                    try:
+                        # Удаляем сообщение пользователя
+                        await app.delete_messages(
+                            chat_id=message.chat.id,
+                            message_ids=message.reply_to_message.id
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка удаления сообщения: {e}")
+                    
+                    try:
+                        # Удаляем команду оффтоп
+                        await message.delete()
+                    except:
+                        pass
+                    
+                    # Выдаем мут на 30 минут
+                    permissions = ChatPermissions(
+                        can_send_messages=False,
+                        can_send_media_messages=False,
+                        can_send_other_messages=False,
+                        can_add_web_page_previews=False
+                    )
+                    
+                    mute_until = datetime.now() + timedelta(minutes=30)
+                    
+                    try:
+                        await app.restrict_chat_member(
+                            chat_id=message.chat.id,
+                            user_id=user_id_target,
+                            permissions=permissions,
+                            until_date=mute_until
+                        )
+                        
+                        # Отправляем сообщение об успешном муте
+                        await app.send_message(
+                            chat_id=message.chat.id,
+                            text=f'🔇 <b>Пользователь замучен за оффтоп</b>\n\n'
+                                 f'👤 <b>Пользователь:</b> {target_user.first_name}\n'
+                                 f'⏰ <b>Время:</b> на 30 минут\n'
+                                 f'👮 <b>Администратор:</b> {message.from_user.mention}\n\n'
+                                 f'<i>Чат для оффтопа: @LineReports</i>'
+                        )
+                        
+                    except ChatAdminRequired:
+                        await message.reply('❌ У бота нет прав администратора')
+                    except Exception as e:
+                        logger.error(f"Ошибка мута: {e}")
+                        await message.reply(f'❌ Ошибка: {str(e)}')
+                else:
+                    await message.reply('⚠️ Ответьте на сообщение пользователя, который нарушает правила')
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в offtop_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА СПАСИБО ==========
+        @app.on_message(command_filter(['спасибо', 'thanks', '+спасибо']))
+        async def thanks_command(app: Client, message: Message):
+            """Команда спасибо"""
+            try:
+                if message.reply_to_message:
+                    target_user = message.reply_to_message.from_user
+                    target_id = target_user.id
+                    
+                    increment_leaked_count(target_id)
+                    
+                    cursor.execute("SELECT leaked FROM users WHERE id = ?", (target_id,))
+                    result = cursor.fetchone()
+                    current_leaked = result[0] if result else 0
+                    
+                    await message.reply(
+                        f'✅ Спасибо учтено!\n'
+                        f'👤 Пользователь: {target_user.first_name}\n'
+                        f'💰 Всего слито скаммеров: {current_leaked}\n\n'
+                        f'🙏 Благодарим за помощь в борьбе со скамом!'
+                    )
+                else:
+                    await message.reply('⚠️ Ответьте на сообщение пользователя, которому хотите сказать спасибо')
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в thanks_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА АПЕЛЛЯЦИЙ ==========
+        @app.on_message(command_filter(['appeals', 'апелляции']) & filters.private)
+        async def view_appeals_command(app: Client, message: Message):
+            """Просмотр апелляций"""
+            try:
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                if not status or status not in (2, 3, 4, 5):
+                    await message.reply('⚠️ У вас нет прав для просмотра апелляций')
+                    return
+                
+                appeals = get_pending_appeals()
+                
+                if not appeals:
+                    await message.reply("📋 <b>Список апелляций</b>\n\n✅ <i>Нет ожидающих апелляций</i>")
+                    return
+                
+                text = "📋 <b>Ожидающие апелляции:</b>\n\n"
+                
+                buttons = []
+                for appeal in appeals:
+                    appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
+                    
+                    try:
+                        user = await app.get_users(appeal_user_id)
+                        user_name = user.first_name
+                    except:
+                        user_name = f"ID: {appeal_user_id}"
+                    
+                    short_text = appeal_text[:50] + "..." if len(appeal_text) > 50 else appeal_text
+                    
+                    text += f"🔹 <b>Апелляция #{appeal_id}</b>\n"
+                    text += f"👤 <b>Пользователь:</b> {user_name}\n"
+                    text += f"📅 <b>Дата:</b> {created_at}\n"
+                    text += f"📝 <b>Текст:</b> {short_text}\n\n"
+                    
+                    buttons.append([
+                        InlineKeyboardButton(
+                            f"📝 Рассмотреть апелляцию #{appeal_id}",
+                            callback_data=f"view_appeal_{appeal_id}"
+                        )
+                    ])
+                
+                keyboard = InlineKeyboardMarkup(buttons)
+                await message.reply(text, reply_markup=keyboard)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в view_appeals_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДЫ АДМИНИСТРАЦИИ С ПРЕФИКСОМ + ==========
+        @app.on_message(plus_command_filter(["ВыдатьСоздателя", "ВыдатьПрезидента", "ВыдатьАдмина", "ВыдатьСтажера", "ВыдатьДиректора", "ВыдатьГаранта"]))
+        async def promote_handler(app, message: Message):
+            """Выдача ролей"""
+            try:
+                user_id = message.from_user.id
+                owner = check_owner(user_id)
+                status = check_status(user_id)
+                
+                if not owner and status not in [4, 5]:
+                    await message.reply('❌ Нет прав')
+                    return
+
+                text = message.text or ""
+                command = text.split()[0]
+                
+                target_id = None
+                if message.reply_to_message:
+                    target_id = message.reply_to_message.from_user.id
+                else:
+                    args = text.split()
+                    if len(args) > 1:
+                        try:
+                            target_user = await app.get_users(args[1])
+                            target_id = target_user.id
+                        except:
+                            await message.reply('❌ Неверный юзер')
+                            return
+                    else:
+                        await message.reply('❌ Укажите пользователя')
+                        return
+                
+                if command == "+ВыдатьСоздателя":
+                    if owner:
+                        admin_func(target_id, 5)
+                        await message.reply('✅ Юзеру выдан создатель.')
+                    else:
+                        await message.reply('❌ Нет прав')
+
+                elif command == "+ВыдатьПрезидента":
+                    if owner:
+                        admin_func(target_id, 4)
+                        await message.reply('✅ Юзеру выдан президент.')
+                    else:
+                        await message.reply('❌ Нет прав')
+                        
+                elif command == "+ВыдатьДиректора":
+                    if owner or status in [4, 5]:
+                        admin_func(target_id, 3)
+                        await message.reply('✅ Юзеру выдан директор.')
+                    else:
+                        await message.reply('❌ Нет прав')
+                        
+                elif command == "+ВыдатьАдмина":
+                    if owner or status in [4, 5]:
+                        admin_func(target_id, 2)
+                        await message.reply('✅ Юзеру выдан администратор.')
+                    else:
+                        await message.reply('❌ Нет прав')
+                        
+                elif command == "+ВыдатьСтажера":
+                    if owner or status in [4, 5]:
+                        args = text.split()
+                        if len(args) >= 2:
+                            if message.reply_to_message:
+                                kurator = args[1]
+                                try:
+                                    if kurator.isdigit():
+                                        cursor.execute('INSERT INTO admins(id, status, kurator) VALUES (?, ?, ?)', 
+                                                      (target_id, 1, int(kurator)))
+                                    elif kurator.startswith('@'):
+                                        kurator_user = await app.get_users(kurator)
+                                        if kurator_user:
+                                            cursor.execute('INSERT INTO admins(id, status, kurator) VALUES (?, ?, ?)', 
+                                                          (target_id, 1, kurator_user.id))
+                                        else:
+                                            await message.reply('❌ Куратор не найден')
+                                            return
+                                    connection.commit()
+                                    await message.reply('✅ Стажер с куратором выдан')
+                                except Exception as e:
+                                    logger.error(f"Ошибка выдачи стажера: {e}")
+                                    await message.reply('❌ Ошибка выдачи стажера')
+                            else:
+                                await message.reply('🚫 Используйте ответом на сообщение: +ВыдатьСтажера @юзкуратора')
+                        else:
+                            await message.reply('🚫 Формат: +ВыдатьСтажера @юзстажера @юзкуратора')
+                    else:
+                        await message.reply('❌ Нет прав')
+
+                elif command == "+ВыдатьГаранта":
+                    if owner or status in [5]:
+                        try:
+                            cursor.execute('INSERT OR IGNORE INTO garants(id) VALUES(?)', (target_id,))
+                            connection.commit()
+                            await message.reply('✅ Гарант успешно выдан.')
+                        except Exception as e:
+                            logger.error(f"Ошибка выдачи гаранта: {e}")
+                            await message.reply('❌ Ошибка выдачи гаранта')
+                    else:
+                        await message.reply('❌ Нет прав.')
+                        
+            except Exception as e:
+                logger.error(f"Ошибка в promote_handler: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДЫ СНЯТИЯ РОЛЕЙ С ПРЕФИКСОМ - ==========
+        @app.on_message(minus_command_filter(["СнятьСоздателя", "СнятьПрезидента", "СнятьАдмина", "СнятьСтажера", "СнятьДиректора", "СнятьГаранта"]))
+        async def demote_handler(app, message: Message):
+            """Снятие ролей"""
+            try:
+                user_id = message.from_user.id
+                owner = check_owner(user_id)
+                status = check_status(user_id)
+                
+                text = message.text or ""
+                command = text.split()[0]
+                
+                # Определяем ID пользователя для снятия роли
+                target_id = None
+                if message.reply_to_message:
+                    target_id = message.reply_to_message.from_user.id
+                else:
+                    args = text.split()
+                    if len(args) > 1:
+                        try:
+                            target_user = await app.get_users(args[1])
+                            target_id = target_user.id
+                        except:
+                            await message.reply('❌ Пользователь не найден')
+                            return
+                    else:
+                        await message.reply('❌ Укажите пользователя')
+                        return
+                
+                # Проверяем права для каждой команды
+                if command == "-СнятьСоздателя":
+                    if not owner:
+                        await message.reply('❌ Только владелец может снимать создателя')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM admins WHERE id = ? AND status = 5', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            await message.reply('✅ Роль создателя снята')
+                        else:
+                            await message.reply('❌ Пользователь не является создателем')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия создателя: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+
+                elif command == "-СнятьПрезидента":
+                    if not owner:
+                        await message.reply('❌ Только владелец может снимать президента')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM admins WHERE id = ? AND status = 4', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            await message.reply('✅ Роль президента снята')
+                        else:
+                            await message.reply('❌ Пользователь не является президентом')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия президента: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+                        
+                elif command == "-СнятьДиректора":
+                    if not owner and status not in [4, 5]:
+                        await message.reply('❌ Нет прав для снятия директора')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM admins WHERE id = ? AND status = 3', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            await message.reply('✅ Роль директора снята')
+                        else:
+                            await message.reply('❌ Пользователь не является директором')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия директора: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+                        
+                elif command == "-СнятьАдмина":
+                    if not owner and status not in [3, 4, 5]:
+                        await message.reply('❌ Нет прав для снятия админа')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM admins WHERE id = ? AND status = 2', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            await message.reply('✅ Роль администратора снята')
+                        else:
+                            await message.reply('❌ Пользователь не является администратором')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия админа: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+                        
+                elif command == "-СнятьСтажера":
+                    if not owner and status not in [2, 3, 4, 5]:
+                        await message.reply('❌ Нет прав для снятия стажера')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM admins WHERE id = ? AND status = 1', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            await message.reply('✅ Роль стажера снята')
+                        else:
+                            await message.reply('❌ Пользователь не является стажером')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия стажера: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+
+                elif command == "-СнятьГаранта":
+                    if not owner and status not in [4, 5]:
+                        await message.reply('❌ Нет прав для снятия гаранта')
+                        return
+                    
+                    try:
+                        cursor.execute('DELETE FROM garants WHERE id = ?', (target_id,))
+                        connection.commit()
+                        if cursor.rowcount > 0:
+                            # Также удаляем всех trusteds этого гаранта
+                            cursor.execute('DELETE FROM trusteds WHERE garant_id = ?', (target_id,))
+                            connection.commit()
+                            await message.reply('✅ Роль гаранта снята. Все trusteds этого гаранта также удалены.')
+                        else:
+                            await message.reply('❌ Пользователь не является гарантом')
+                    except Exception as e:
+                        logger.error(f"Ошибка снятия гаранта: {e}")
+                        await message.reply('❌ Ошибка снятия роли')
+                        
+            except Exception as e:
+                logger.error(f"Ошибка в demote_handler: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== КОМАНДА ПРОСМОТРА РОЛЕЙ ==========
+        @app.on_message(command_filter(['roles', 'роли', 'админы']))
+        async def view_roles_command(app: Client, message: Message):
+            """Просмотр всех ролей"""
+            try:
+                user_id = message.from_user.id
+                status = check_status(user_id)
+                
+                if not status or status not in (2, 3, 4, 5):
+                    await message.reply('⚠️ У вас нет прав для просмотра ролей')
+                    return
+                
+                text = "👑 <b>Роли в базе:</b>\n\n"
+                
+                # Создатели (статус 5)
+                cursor.execute('SELECT id FROM admins WHERE status = 5')
+                creators = cursor.fetchall()
+                text += f"<b>Создатели ({len(creators)}):</b>\n"
+                for creator in creators:
+                    try:
+                        user = await app.get_users(creator[0])
+                        text += f"• {user.mention} (ID: {creator[0]})\n"
+                    except:
+                        text += f"• ID: {creator[0]}\n"
+                text += "\n"
+                
+                # Президенты (статус 4)
+                cursor.execute('SELECT id FROM admins WHERE status = 4')
+                presidents = cursor.fetchall()
+                text += f"<b>Президенты ({len(presidents)}):</b>\n"
+                for president in presidents:
+                    try:
+                        user = await app.get_users(president[0])
+                        text += f"• {user.mention} (ID: {president[0]})\n"
+                    except:
+                        text += f"• ID: {president[0]}\n"
+                text += "\n"
+                
+                # Директора (статус 3)
+                cursor.execute('SELECT id FROM admins WHERE status = 3')
+                directors = cursor.fetchall()
+                text += f"<b>Директора ({len(directors)}):</b>\n"
+                for director in directors:
+                    try:
+                        user = await app.get_users(director[0])
+                        text += f"• {user.mention} (ID: {director[0]})\n"
+                    except:
+                        text += f"• ID: {director[0]}\n"
+                text += "\n"
+                
+                # Админы (статус 2)
+                cursor.execute('SELECT id FROM admins WHERE status = 2')
+                admins = cursor.fetchall()
+                text += f"<b>Администраторы ({len(admins)}):</b>\n"
+                for admin in admins:
+                    try:
+                        user = await app.get_users(admin[0])
+                        text += f"• {user.mention} (ID: {admin[0]})\n"
+                    except:
+                        text += f"• ID: {admin[0]}\n"
+                text += "\n"
+                
+                # Стажеры (статус 1)
+                cursor.execute('SELECT id FROM admins WHERE status = 1')
+                trainees = cursor.fetchall()
+                text += f"<b>Стажеры ({len(trainees)}):</b>\n"
+                for trainee in trainees:
+                    try:
+                        user = await app.get_users(trainee[0])
+                        text += f"• {user.mention} (ID: {trainee[0]})\n"
+                    except:
+                        text += f"• ID: {trainee[0]}\n"
+                text += "\n"
+                
+                # Гаранты
+                cursor.execute('SELECT id FROM garants')
+                garants = cursor.fetchall()
+                text += f"<b>Гаранты ({len(garants)}):</b>\n"
+                for garant in garants:
+                    try:
+                        user = await app.get_users(garant[0])
+                        text += f"• {user.mention} (ID: {garant[0]})\n"
+                    except:
+                        text += f"• ID: {garant[0]}\n"
+                
+                await message.reply(text)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в view_roles_command: {e}")
+                await message.reply(f'❌ Ошибка: {str(e)}')
+
+        # ========== ОБРАБОТКА КОЛБЭКОВ ==========
+        @app.on_callback_query(filters.regex(r'^scam_type_'))
+        async def scam_type_callback(app: Client, callback_query: CallbackQuery):
+            """Обработка выбора типа скама"""
+            try:
+                data = callback_query.data
+                parts = data.split('_')
+                
+                if len(parts) < 4:
+                    await callback_query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                
+                scam_type = int(parts[2])  # 1 = возможно скаммер, 2 = скамер
+                target_user_id = int(parts[3])
+                
+                user_id = callback_query.from_user.id
+                
+                if user_id not in user_appeals:
+                    await callback_query.answer("❌ Сессия истекла", show_alert=True)
+                    return
+                
+                data = user_appeals[user_id]
+                if data['action'] != 'scam' or 'target_id' not in data:
+                    await callback_query.answer("❌ Неверный шаг", show_alert=True)
+                    return
+                
+                target_id = data['target_id']
+                reason = data['reason']
+                proof = data['proof']
+                
+                if scam_func(target_id, proof, reason, scam_type, user_id):
+                    try:
+                        target_user = await app.get_users(target_id)
+                        target_name = target_user.first_name
+                    except:
+                        target_name = f"ID: {target_id}"
+                    
+                    scam_type_text = "⚠️ Возможно скаммер" if scam_type == 1 else "❗ СКАМ"
+                    
+                    await callback_query.edit_message_text(
+                        f"✅ <b>Пользователь добавлен в базу скаммеров!</b>\n\n"
+                        f"👤 <b>Пользователь:</b> {target_name}\n"
+                        f"🆔 <b>ID:</b> <code>{target_id}</code>\n"
+                        f"📝 <b>Причина:</b> {reason}\n"
+                        f"🔗 <b>Пруфы:</b> {proof}\n"
+                        f"🎯 <b>Тип:</b> {scam_type_text}\n"
+                        f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
+                    )
+                    
+                    del user_appeals[user_id]
+                else:
+                    await callback_query.answer("❌ Ошибка при добавлении в базу скаммеров", show_alert=True)
+                
+                await callback_query.answer()
+                
+            except Exception as e:
+                logger.error(f"Ошибка в scam_type_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^mute_'))
+        async def mute_time_callback(app: Client, callback_query: CallbackQuery):
+            """Обработка мута"""
+            try:
+                data = callback_query.data
+                parts = data.split('_')
+                
+                if len(parts) < 3:
+                    await callback_query.answer("❌ Ошибка данных", show_alert=True)
+                    return
+                
+                time_str = parts[1]
+                target_user_id = int(parts[2])
+                
+                try:
+                    target_user = await app.get_users(target_user_id)
+                    target_name = target_user.first_name
+                except:
+                    target_name = f"ID: {target_user_id}"
+                
+                chat_id = callback_query.message.chat.id
+                
+                admin_id = callback_query.from_user.id
+                status = check_status(admin_id)
+                
+                if not status or status not in (1, 2, 3, 4, 5):
+                    await callback_query.answer("⚠️ У вас нет прав", show_alert=True)
+                    return
+                
+                target_status = check_status(target_user_id)
+                if target_status and target_status >= 1:
+                    await callback_query.answer("⚠️ Нельзя мутить администраторов", show_alert=True)
+                    return
+                
+                permissions = ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False
+                )
+                
+                if time_str == "permanent":
+                    mute_until = datetime.now() + timedelta(days=31)
+                    time_text = "навсегда"
+                else:
+                    minutes = int(time_str)
+                    mute_until = datetime.now() + timedelta(minutes=minutes)
+                    
+                    if minutes < 60:
+                        time_text = f"на {minutes} минут"
+                    elif minutes < 1440:
+                        hours = minutes // 60
+                        time_text = f"на {hours} час{'а' if 2 <= hours % 10 <= 4 and not 10 <= hours <= 20 else ''}"
+                    else:
+                        days = minutes // 1440
+                        time_text = f"на {days} день{'я' if 2 <= days % 10 <= 4 and not 10 <= days <= 20 else 'ей'}"
+                
+                try:
+                    await app.restrict_chat_member(chat_id, target_user_id, permissions, until_date=mute_until)
+                    
+                    await callback_query.edit_message_text(
+                        f'✅ <b>Пользователь замучен</b>\n\n'
+                        f'👤 <b>Пользователь:</b> {target_name}\n'
+                        f'⏰ <b>Время:</b> {time_text}\n'
+                        f'👮 <b>Администратор:</b> {callback_query.from_user.mention}\n\n'
+                        f'<i>Чат для оффтопа: @LineReports</i>'
+                    )
+                    
+                except ChatAdminRequired:
+                    await callback_query.answer("❌ У бота нет прав администратора", show_alert=True)
+                except Exception as e:
+                    logger.error(f"Ошибка мута: {e}")
+                    await callback_query.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в mute_time_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^setcountry_'))
+        async def set_country_callback(app: Client, callback_query: CallbackQuery):
+            """Установка страны"""
+            try:
+                country_name = callback_query.data.split('_', 1)[1].replace('_', ' ')
+                
+                user_id = callback_query.from_user.id
+                set_user_country(user_id, country_name)
+                
+                await callback_query.answer(f"✅ Страна установлена: {country_name}", show_alert=True)
+                
+                await callback_query.edit_message_text(
+                    f"✅ Ваша страна установлена: {country_name}\n\n"
+                    f"Теперь вы можете проверить свой профиль командой /check или через меню."
+                )
+                
+            except Exception as e:
+                logger.error(f"Ошибка установки страны: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^cancel_country$'))
+        async def cancel_country_callback(app: Client, callback_query: CallbackQuery):
+            """Отмена страны"""
+            await callback_query.edit_message_text("❌ Выбор страны отменен.")
+
+        @app.on_callback_query(filters.regex(r'^change_country$'))
+        async def change_country_callback(app: Client, callback_query: CallbackQuery):
+            """Смена страны"""
+            try:
+                buttons = []
+                row = []
+                countries_list = list(COUNTRIES.items())
+                
+                for i, (name, code) in enumerate(countries_list):
+                    row.append(InlineKeyboardButton(name, callback_data=f"setcountry_{name}"))
+                    if len(row) == 2 or i == len(countries_list) - 1:
+                        buttons.append(row)
+                        row = []
+                
+                buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_country")])
+                
+                keyboard = InlineKeyboardMarkup(buttons)
+                
+                await callback_query.message.edit_text(
+                    "🌍 <b>Выберите вашу страну:</b>\n\n"
+                    "Это поможет другим пользователям узнать, откуда вы.\n"
+                    "Страна будет отображаться в вашем профиле под репутацией.",
+                    reply_markup=keyboard
+                )
+                
+            except Exception as e:
+                logger.error(f"Ошибка выбора страны: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^appeal_'))
+        async def appeal_callback(app: Client, callback_query: CallbackQuery):
+            """Апелляция"""
+            try:
+                user_id = int(callback_query.data.split('_')[1])
+                
+                if callback_query.from_user.id != user_id:
+                    await callback_query.answer("❌ Это не ваша кнопка апелляции", show_alert=True)
+                    return
+                
+                cursor.execute('SELECT id FROM appeals WHERE user_id = ? AND status = "pending"', (user_id,))
+                existing_appeal = cursor.fetchone()
+                
+                if existing_appeal:
+                    await callback_query.answer("❌ У вас уже есть ожидающая апелляция", show_alert=True)
+                    return
+                
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Отменить апелляцию", callback_data="cancel_appeal")]
+                ])
+                
+                await callback_query.message.reply(
+                    "Вы начали процесс апелляции\n\n"
+                    "Опишите подробно причины, по которой вы считаете, что вы не должны быть в базе скамеров. а также оставьте свои контактые данные @юз\n\n"
+                    "❌ Нажмите кнопку ниже для отмены процесса апеляции",
+                    reply_markup=keyboard
+                )
+                
+                user_appeals[user_id] = {
+                    'action': 'appeal',
+                    'step': 'text'
+                }
+                
+                await callback_query.answer()
+                
+            except Exception as e:
+                logger.error(f"Ошибка в appeal_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^cancel_appeal$'))
+        async def cancel_appeal_callback(app: Client, callback_query: CallbackQuery):
+            """Отмена апелляции"""
+            try:
+                user_id = callback_query.from_user.id
+                
+                if user_id in user_appeals and user_appeals[user_id]['action'] == 'appeal':
+                    del user_appeals[user_id]
+                
+                await callback_query.message.edit_text("❌ Процесс апелляции отменен.")
+                await callback_query.answer("Апелляция отменена")
+                
+            except Exception as e:
+                logger.error(f"Ошибка в cancel_appeal_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^view_appeal_'))
+        async def view_appeal_callback(app: Client, callback_query: CallbackQuery):
+            """Просмотр апелляции"""
+            try:
+                appeal_id = int(callback_query.data.split('_')[2])
+                
+                cursor.execute('SELECT * FROM appeals WHERE id = ?', (appeal_id,))
+                appeal = cursor.fetchone()
+                
+                if not appeal:
+                    await callback_query.answer("❌ Апелляция не найдена", show_alert=True)
+                    return
+                
+                appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
+                
+                try:
+                    user = await app.get_users(appeal_user_id)
+                    user_name = user.first_name
+                    user_mention = user.mention if user.first_name else f"ID: {appeal_user_id}"
+                except:
+                    user_name = f"ID: {appeal_user_id}"
+                    user_mention = f"ID: {appeal_user_id}"
+                
+                admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(appeal_user_id)
+                
+                text = f"📋 <b>Апелляция #{appeal_id}</b>\n\n"
+                text += f"👤 <b>Пользователь:</b> {user_mention}\n"
+                text += f"🆔 <b>ID:</b> <code>{appeal_user_id}</code>\n"
+                
+                if scammer_data:
+                    reason = scammer_data[2] if len(scammer_data) > 2 else "Не указана"
+                    proof = scammer_data[1] if len(scammer_data) > 1 else "#"
+                    text += f"⚠️ <b>Причина скама:</b> {reason}\n"
+                    text += f"🔗 <b>Пруфы:</b> <a href='{proof}'>Ссылка</a>\n"
+                
+                text += f"📅 <b>Дата подачи:</b> {created_at}\n"
+                text += f"📝 <b>Текст апелляции:</b>\n<code>{appeal_text}</code>\n\n"
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_appeal_{appeal_id}"),
+                        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_appeal_{appeal_id}")
+                    ],
+                    [
+                        InlineKeyboardButton("👤 Проверить профиль", callback_data=f"check_{appeal_user_id}")
+                    ],
+                    [
+                        InlineKeyboardButton("🔙 Назад к списку", callback_data="back_to_appeals")
+                    ]
+                ])
+                
+                await callback_query.edit_message_text(text, reply_markup=keyboard)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в view_appeal_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^(approve|reject)_appeal_'))
+        async def handle_appeal_decision(app: Client, callback_query: CallbackQuery):
+            """Решение по апелляции"""
+            try:
+                action = callback_query.data.split('_')[0]
+                appeal_id = int(callback_query.data.split('_')[2])
+                
+                cursor.execute('SELECT * FROM appeals WHERE id = ?', (appeal_id,))
+                appeal = cursor.fetchone()
+                
+                if not appeal:
+                    await callback_query.answer("❌ Апелляция не найдена", show_alert=True)
+                    return
+                
+                appeal_id, appeal_user_id, appeal_text, appeal_status, created_at, admin_id, resolved_at = appeal
+                
+                if action == "approve":
+                    cursor.execute('DELETE FROM scammers WHERE id = ?', (appeal_user_id,))
+                    new_status = "approved"
+                    status_text = "✅ Одобрена"
+                    user_message = "✅ Ваша апелляция одобрена! Вы удалены из базы скаммеров."
+                else:
+                    new_status = "rejected"
+                    status_text = "❌ Отклонена"
+                    user_message = "❌ Ваша апелляция отклонена. Вы остаетесь в базе скаммеров."
+                
+                update_appeal_status(appeal_id, new_status, callback_query.from_user.id)
+                
+                try:
+                    await app.send_message(
+                        appeal_user_id,
+                        f"📋 <b>Решение по вашей апелляции</b>\n\n"
+                        f"{user_message}\n\n"
+                        f"📅 <b>Дата решения:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                        f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
+                    )
+                except:
+                    pass
+                
+                await callback_query.edit_message_text(
+                    f"📋 <b>Апелляция #{appeal_id}</b>\n\n"
+                    f"👮 <b>Решение принято:</b> {status_text}\n"
+                    f"👤 <b>Пользователь:</b> ID: {appeal_user_id}\n"
+                    f"📅 <b>Дата решения:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                    f"👮 <b>Администратор:</b> {callback_query.from_user.mention}"
+                )
+                
+                await callback_query.answer(f"Апелляция {status_text}", show_alert=True)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в handle_appeal_decision: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^back_to_appeals$'))
+        async def back_to_appeals_callback(app: Client, callback_query: CallbackQuery):
+            """Назад к апелляциям"""
+            try:
+                await view_appeals_command(app, callback_query.message)
+            except:
+                await callback_query.answer("❌ Ошибка возврата", show_alert=True)
+
+        @app.on_callback_query(filters.regex(r'^check_'))
+        async def check_callback(app: Client, callback_query: CallbackQuery):
+            """Проверка по кнопке"""
+            try:
+                user_id_to_check = int(callback_query.data.split('_')[1])
+                
+                photo, text = await check_user_func(app, callback_query.message, user_id_to_check)
+                
+                if text:
+                    try:
+                        user = await app.get_users(user_id_to_check)
+                        profile_link = f'https://t.me/{user.username}' if user.username else f'tg://user?id={user_id_to_check}'
+                    except:
+                        profile_link = f'tg://user?id={user_id_to_check}'
+                    
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("👥 Профиль", url=profile_link)]
+                    ])
+                    
+                    if photo:
+                        await callback_query.message.reply_photo(photo, caption=text, reply_markup=keyboard)
+                    else:
+                        await callback_query.message.reply(text, reply_markup=keyboard)
+                    
+                    await callback_query.answer("✅ Информация отправлена")
+                else:
+                    await callback_query.answer("❌ Не удалось получить информацию", show_alert=True)
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в check_callback: {e}")
+                await callback_query.answer("❌ Произошла ошибка", show_alert=True)
+
+        # ========== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ==========
+        @app.on_message(filters.private & filters.text)
+        async def handle_text_messages(app: Client, message: Message):
+            """Обработка текстовых сообщений в ЛС"""
+            try:
+                text = message.text or ""
+                
+                # Пропускаем команды (они обрабатываются отдельно)
+                if text.startswith('/') or text.startswith('!') or text.startswith('.') or text.startswith('-') or text.startswith('+'):
+                    return
+                
+                user_id = message.from_user.id
+                
+                # Обработка апелляций
+                if user_id in user_appeals:
+                    data = user_appeals[user_id]
+                    
+                    if data['action'] == 'appeal' and data['step'] == 'text':
+                        appeal_id = create_appeal(user_id, text)
+                        
+                        if appeal_id:
+                            del user_appeals[user_id]
+                            
+                            await message.reply(
+                                f"✅ <b>Апелляция подана успешно!</b>\n\n"
+                                f"📋 <b>Номер апелляции:</b> #{appeal_id}\n"
+                                f"📝 <b>Ваш текст:</b>\n<code>{text[:100]}...</code>\n\n"
+                                f"ℹ️ Администраторы рассмотрят вашу апелляцию в ближайшее время.\n"
+                                f"ℹ️ Вы получите уведомление о результате."
+                            )
+                            
+                            try:
+                                cursor.execute('SELECT id FROM admins WHERE status >= 2')
+                                admins = cursor.fetchall()
+                                
+                                for admin in admins:
+                                    try:
+                                        await app.send_message(
+                                            admin[0],
+                                            f"📣 <b>Новая апелляция!</b>\n\n"
+                                            f"📋 <b>Апелляция #{appeal_id}</b>\n"
+                                            f"👤 <b>Пользователь:</b> ID: {user_id}\n"
+                                            f"📝 <b>Текст:</b> {text[:100]}...\n\n"
+                                            f"ℹ️ Используйте /appeals для просмотра"
+                                        )
+                                    except:
+                                        continue
+                            except:
+                                pass
+                            
+                        else:
+                            await message.reply('❌ Ошибка при создании апелляции')
+                    
+                    return
+                
+                # Обработка меню
+                if text == "Мой профиль 🆔":
+                    user_id = message.from_user.id
+                    
+                    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+                    if cursor.fetchone() is None:
+                        cursor.execute("INSERT INTO users(id) VALUES (?)", (user_id,))
+                        cursor.execute("INSERT OR IGNORE INTO user_countries(user_id, country) VALUES (?, ?)", (user_id, 'Не указана'))
+                        connection.commit()
+                    
+                    msg = await message.reply('🔎 Проверяется в базе данных...')
+                    
+                    photo, profile_text = await check_user_func(app, message, user_id)
+                    
+                    if profile_text:
+                        buttons = []
+                        buttons.append([InlineKeyboardButton("🌍 Изменить страну", callback_data="change_country")])
+                        
+                        admin_data, user_data, garant_data, trusted_data, scammer_data, country = get_user_data(user_id)
+                        if scammer_data:
+                            buttons.append([InlineKeyboardButton("📝 Подать апелляцию", 
+                                                               callback_data=f"appeal_{user_id}")])
+                        
+                        keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+                        
+                        if photo:
+                            await message.reply_photo(photo, caption=profile_text, reply_markup=keyboard)
+                        else:
+                            await message.reply(profile_text, reply_markup=keyboard)
+                    
+                    await msg.delete()
+                    
+                elif text == "Слить скаммера 😡":
+                    button = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Предложка",
+                                url='https://t.me/LineReports'
+                            )
+                        ]
+                    ])
+                    await message.reply("❗ Чтобы слить скамера переходите в предложку", reply_markup=button)
+
+                elif text == "Частые вопросы ❓":
+                    await message.reply("📚 Частые вопросы:\n\n1. Как проверить пользователя?\n- Используйте команду /чек или кнопку 'Мой профиль'\n\n2. Как стать гарантом?\n- Обратитесь к администраторам базы\n\n3. Как добавить скаммера?\n- Используйте команду /scam")
+
+                elif text == "Гаранты 🔥":
+                    cursor.execute('SELECT id FROM garants')
+                    garants = cursor.fetchall()
+                    if not garants:
+                        await message.reply("❌ Гарантов на данный момент нет")
+                        return
+
+                    buttons = []
+                    for garant in garants:
+                        try:
+                            user = await app.get_users(garant[0])
+                            first_name = user.first_name
+                            username = getattr(user, 'username', 'Нету!')
+
+                            buttons.append(
+                                [InlineKeyboardButton(text=f"✅ {first_name} : @{username}",
+                                                      callback_data=f"check_{user.id}")]
+                            )
+                        except:
+                            continue
+
+                    reply_markup = InlineKeyboardMarkup(buttons)
+                    await message.reply(f"✅ Все гаранты базы: ({len(garants)}):", reply_markup=reply_markup)
+
+                elif text == "Волонтёры 🌴":
+                    cursor.execute('SELECT id FROM admins')
+                    admins = cursor.fetchall()
+
+                    if not admins:
+                        await message.reply("❌ Волонтеров на данный момент нет")
+                        return
+
+                    buttons = []
+                    for admin_user in admins:
+                        try:
+                            user = await app.get_users(admin_user[0])
+                            first_name = user.first_name
+                            username = getattr(user, 'username', 'Нету!')
+
+                            buttons.append(
+                                [InlineKeyboardButton(text=f"🌴 {first_name} : @{username}",
+                                                      callback_data=f"check_{user.id}")]
+                            )
+                        except:
+                            continue
+
+                    if len(buttons) > 100:
+                        await message.reply("Слишком много волонтёров для отображения.")
+                        return
+
+                    reply_markup = InlineKeyboardMarkup(buttons)
+                    await message.reply(f"🌴 Все волонтеры базы: ({len(admins)})", reply_markup=reply_markup)
+
+                elif text == "Статистика 📊":
+                    cursor.execute('SELECT id FROM scammers')
+                    scammers = cursor.fetchall()
+                    scams_count = len(scammers)
+
+                    cursor.execute('SELECT id FROM users')
+                    users = cursor.fetchall()
+                    users_count = len(users)
+                    
+                    cursor.execute('SELECT id FROM admins')
+                    admins_count = len(cursor.fetchall())
+                    
+                    cursor.execute('SELECT id FROM garants')
+                    garants_count = len(cursor.fetchall())
+                    
+                    await message.reply(f'''
+    📊 Статистика бота:
+    🔎 Слито скаммеров: {scams_count}  
+    👥 Пользователей бота: {users_count}
+    🌴 Волонтёров: {admins_count}
+    🔥 Гарантов: {garants_count}
+    ''')
+
+            except Exception as e:
+                logger.error(f"Ошибка в handle_text_messages: {e}")
+
+        # ========== ЗАПУСК БОТА ==========
+        print("✅ Обработчики установлены")
+        print("🚀 Бот запускается...")
         
         app.run()
         
@@ -2009,3 +2355,6 @@ if __name__ == "__main__":
             connection.close()
             print("🔒 Соединение с БД закрыто")
         print("👋 Бот остановлен")
+
+if __name__ == "__main__":
+    main()
