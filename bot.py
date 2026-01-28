@@ -23,7 +23,7 @@ from pyrogram.errors import ChatAdminRequired, UserAdminInvalid, ChannelPrivate,
 OWNER_ID = [6257985367, 7724765203]
 API_ID = 28760873
 API_HASH = 'b5e24c6a48beb5ee0273055c25ee1d22'
-BOT_TOKEN = '8577200923:AAHLYtksJkBt4WzX_b35YxzIw1edeD5iEHw'
+BOT_TOKEN = '8577200923:AAFAAxiRGHUkvQa0WiRL9kxsR2IHo9RwL_A'
 NUM_WORKERS = 16
 
 # Изображения (оригинальные ссылки)
